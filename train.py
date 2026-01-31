@@ -46,15 +46,21 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
         input_ids = batch["input_ids"].to(device)
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["labels"].to(device)
-        
-        # 开启自动混合精度上下文
-        with torch.amp.autocast('cuda', dtype=torch.float16): # 这里才是真正触发 T4 加速的地方
-            outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss
-            # 梯度累积
-            loss = loss / grad_accum_steps
 
-        scaler.scale(loss).backward()      
+        # 简化：如果是 Mac (MPS) 或 CPU，去掉 autocast 和 scaler
+        if device == "cuda":
+            with torch.amp.autocast('cuda', dtype=torch.float16):
+                outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
+                loss = outputs.loss / grad_accum_steps
+            scaler.scale(loss).backward()
+        else:
+            # Mac / CPU 路径
+            outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
+            loss = outputs.loss / grad_accum_steps
+            # 打印调试：如果这里是 None，说明 forward 内部还是断了
+            if batch_idx == 0: 
+                print(f"DEBUG: loss grad_fn = {loss.grad_fn}")
+            loss.backward()
 
         # 每累积 grad_accum_steps 步更新一次参数
         if (batch_idx + 1) % grad_accum_steps == 0:
@@ -145,7 +151,8 @@ def train_model(
     scheduler,
     device,
     num_epochs=3,
-    checkpoint_dir="./checkpoints"
+    checkpoint_dir="./checkpoints",
+    config=None
 ):
     """完整的训练流程"""
     best_val_loss = float('inf')
@@ -171,9 +178,6 @@ def train_model(
         )
         train_losses.append(train_loss)
         
-        # 更新学习率
-        scheduler.step()
-        
         # 验证
         if val_dataloader is not None:
             val_loss = evaluate(model, val_dataloader, device, epoch)
@@ -192,7 +196,7 @@ def train_model(
         save_checkpoint(model.projector, optimizer, scheduler, epoch, train_loss, checkpoint_dir)
     
     # 保存最终模型
-    final_model_path = os.path.join(checkpoint_dir, "projector.pt")
+    final_model_path = os.path.join(checkpoint_dir, f"projector_{config['llm_name']}_{config['vision_name']}_{config['sample_size']}.pt")
     torch.save(model.projector.state_dict(), final_model_path)
     logger.info(f"Final model saved to {final_model_path}")
     
@@ -215,6 +219,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
     parser.add_argument("--sample_size", type=int, default=20000, help="Sample size for training")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--llm_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="LLM model name")
+    parser.add_argument("--vision_name", type=str, default="openai/clip-vit-base-patch16", help="Vision model name")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for optimizer")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for optimizer")
     parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Warmup ratio for learning rate scheduler")
@@ -228,6 +234,8 @@ def main():
         'learning_rate': args.learning_rate,
         'weight_decay': args.weight_decay,
         'warmup_ratio': args.warmup_ratio,
+        'llm_name': args.llm_name,
+        'vision_name': args.vision_name,
         'grad_accum_steps': 4,
         'checkpoint_dir': args.checkpoint_dir,
         'sample_size': args.sample_size
@@ -241,20 +249,33 @@ def main():
     else:
         device = "cpu"
     
+    # 临时：使用 CPU 训练
+    # device = "cpu"
+
     logger.info(f"Using device: {device}")
     
     # 初始化模型
     logger.info("Loading model...")
 
-
-    projector_path = os.path.join(config['checkpoint_dir'], "projector.pt")
+    projector_path = os.path.join(config['checkpoint_dir'], f"projector_{config['llm_name']}_{config['vision_name']}_{config['sample_size']}.pt")
     if os.path.exists(projector_path):
         projector_params = torch.load(projector_path)
     else:
         projector_params = None
 
-    model = VLMModel(projector_params=projector_params)
+    model = VLMModel(llm_name=config['llm_name'], vision_name=config['vision_name'], projector_params=projector_params)
     model = model.to(device)
+
+
+    # 这两行一定要紧跟在初始化 model 之后，否则索引不到 <image> 会在 forward 报错！
+    model.tokenizer.add_tokens(["<image>"], special_tokens=True)
+    model.language_model.resize_token_embeddings(len(model.tokenizer))
+
+
+    print(f"DEBUG: <image> token id = {model.tokenizer.convert_tokens_to_ids('<image>')}")
+    test_text = "核心测试 <image> 结束"
+    test_ids = model.tokenizer.encode(test_text)
+    print(f"DEBUG: 编码测试 '{test_text}' -> {test_ids}")
     
     # 计算参数数量
     total_params = sum(p.numel() for p in model.parameters())
@@ -284,7 +305,7 @@ def main():
         train_dataset,
         batch_size=config['batch_size'],
         shuffle=True,
-        num_workers=0,
+        num_workers=2,
         pin_memory=True
     )
     
@@ -292,16 +313,18 @@ def main():
         val_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=0,
+        num_workers=2,
         pin_memory=True
     )
     
     logger.info(f"Train batches per epoch: {len(train_dataloader)}")
     logger.info(f"Val batches per epoch: {len(val_dataloader)}")
     
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     # 优化器
     optimizer = optim.AdamW(
-        model.parameters(),
+        trainable_params,
         lr=config['learning_rate'],
         weight_decay=config['weight_decay']
     )
@@ -325,7 +348,8 @@ def main():
         scheduler=scheduler,
         device=device,
         num_epochs=config['num_epochs'],
-        checkpoint_dir=config['checkpoint_dir']
+        checkpoint_dir=config['checkpoint_dir'],
+        config=config
     )
     
     logger.info("Training completed successfully!")
