@@ -9,6 +9,7 @@ else:
     device = "cpu"
 
 
+target_dtype = torch.float16
 
 class VLMModel(torch.nn.Module):
     def __init__(self, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch16", projector_params=None):
@@ -17,13 +18,16 @@ class VLMModel(torch.nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
         self.language_model = AutoModelForCausalLM.from_pretrained(
             llm_name,
-            torch_dtype=torch.float32,
+            torch_dtype=target_dtype,
             device_map=device,
+            attn_implementation="sdpa", 
+            # 节省显存的进阶配置
+            low_cpu_mem_usage=True
         )
 
         self.vision_encoder = CLIPVisionModel.from_pretrained(
             vision_name,
-            torch_dtype=torch.float32,
+            torch_dtype=target_dtype,
             device_map=device
         )
     
@@ -38,7 +42,7 @@ class VLMModel(torch.nn.Module):
         if projector_params is not None:
             self.projector.load_state_dict(projector_params)
 
-        self.projector.to(device, dtype=torch.float32)
+        self.projector.to(device, dtype=target_dtype)
 
 
     def forward(self, input_ids, pixel_values, labels=None):
