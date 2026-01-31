@@ -317,6 +317,7 @@ class LLaVADataset(Dataset):
         if not self.data:
             self.load()
         
+
         # 创建图片目录
         os.makedirs(self.images_dir, exist_ok=True)
         
