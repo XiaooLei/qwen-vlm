@@ -108,7 +108,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, loss, checkpoint_dir):
     
     torch.save({
         'epoch': epoch,
-        'projector_state_dict': model.projector.state_dict(),
+        'projector_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'loss': loss,
@@ -169,11 +169,11 @@ def train_model(
                 logger.info(f"New best model saved with validation loss: {val_loss:.4f}")
         
         # 每个 epoch 保存检查点
-        save_checkpoint(model, optimizer, scheduler, epoch, train_loss, checkpoint_dir)
+        save_checkpoint(model.projector, optimizer, scheduler, epoch, train_loss, checkpoint_dir)
     
     # 保存最终模型
-    final_model_path = os.path.join(checkpoint_dir, "final_model.pt")
-    torch.save(model.state_dict(), final_model_path)
+    final_model_path = os.path.join(checkpoint_dir, "projector.pt")
+    torch.save(model.projector.state_dict(), final_model_path)
     logger.info(f"Final model saved to {final_model_path}")
     
     # 训练总结
