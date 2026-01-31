@@ -13,7 +13,7 @@ from transformers import AutoTokenizer, CLIPImageProcessor
 class LLaVADataset(Dataset):
     """LLaVA 数据集加载器"""
     
-    def __init__(self, data_dir: str = "./llava_data", is_train: bool = True, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch", sample_size: int = None):
+    def __init__(self, data_dir: str = "./llava_data", is_train: bool = True, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch16", sample_size: int = None):
         """
         初始化数据集加载器
         
