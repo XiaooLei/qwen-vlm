@@ -17,13 +17,13 @@ class VLMModel(torch.nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
         self.language_model = AutoModelForCausalLM.from_pretrained(
             llm_name,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.float32,
             device_map=device,
         )
 
         self.vision_encoder = CLIPVisionModel.from_pretrained(
             vision_name,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.float32,
             device_map=device
         )
     
@@ -38,7 +38,7 @@ class VLMModel(torch.nn.Module):
         if projector_params is not None:
             self.projector.load_state_dict(projector_params)
 
-        self.projector.to(device, dtype=torch.float16)
+        self.projector.to(device, dtype=torch.float32)
 
 
     def forward(self, input_ids, pixel_values, labels=None):
