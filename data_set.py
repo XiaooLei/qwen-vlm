@@ -13,7 +13,7 @@ from transformers import AutoTokenizer, CLIPImageProcessor
 class LLaVADataset(Dataset):
     """LLaVA 数据集加载器"""
     
-    def __init__(self, data_dir: str = "./llava_data", is_train: bool = True, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch16", sample_size: int = None):
+    def __init__(self, data_dir: str = "./llava_data", is_train: bool = True, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch", sample_size: int = None):
         """
         初始化数据集加载器
         
@@ -59,7 +59,14 @@ class LLaVADataset(Dataset):
         
         # 处理图像
         image_path = sample.get('image_path')
-        if image_path and os.path.exists(image_path):
+        if image_path:
+            # 检查图片是否存在，如果不存在尝试下载
+            if not os.path.exists(image_path):
+                image_filename = os.path.basename(image_path)
+                print(f"图片不存在，尝试下载: {image_filename}")
+                self._download_single_image(image_filename)
+            
+            # 尝试打开图片
             try:
                 image = Image.open(image_path).convert('RGB')
                 pixel_values = self.image_processor(images=image, return_tensors="pt").pixel_values.squeeze(0)
@@ -70,7 +77,7 @@ class LLaVADataset(Dataset):
                 pixel_values = torch.zeros(3, 224, 224)  # CLIP默认尺寸
                 pixel_values = pixel_values.to(torch.bfloat16)  
         else:
-            # 如果图像不存在，返回零张量
+            # 如果图像路径不存在，返回零张量
             pixel_values = torch.zeros(3, 224, 224)  # CLIP默认尺寸
             pixel_values = pixel_values.to(torch.bfloat16)  
         
@@ -182,6 +189,38 @@ class LLaVADataset(Dataset):
         """
         return os.path.join(self.images_dir, image_filename)
     
+    def _download_single_image(self, image_filename: str) -> bool:
+        """
+        下载单个图片
+        
+        Args:
+            image_filename: 图片文件名
+            
+        Returns:
+            是否下载成功
+        """
+        local_path = os.path.join(self.images_dir, image_filename)
+        
+        # 如果本地已存在，直接返回成功
+        if os.path.exists(local_path):
+            return True
+        
+        # COCO 图片下载基础 URL
+        base_url = "http://images.cocodataset.org/train2017/"
+        img_url = base_url + image_filename
+        
+        try:
+            # 确保图片目录存在
+            os.makedirs(self.images_dir, exist_ok=True)
+            # 下载图片
+            img_data = requests.get(img_url, timeout=10).content
+            with open(local_path, 'wb') as handler:
+                handler.write(img_data)
+            return True
+        except Exception as e:
+            print(f"下载失败 {image_filename}: {e}")
+            return False
+    
     def download_images(self, sample_size: int = 1000) -> None:
         """
         按需下载指定数量的图片
@@ -199,9 +238,6 @@ class LLaVADataset(Dataset):
         # 选择要下载的子集
         subset = self.data[:sample_size]
         
-        # COCO 图片下载基础 URL
-        base_url = "http://images.cocodataset.org/train2017/"
-        
         print(f"开始按需下载 {sample_size} 张图片...")
         
         downloaded = 0
@@ -212,19 +248,10 @@ class LLaVADataset(Dataset):
             if not img_name:
                 continue
             
-            local_path = os.path.join(self.images_dir, img_name)
-            
-            # 如果本地没有再下载
-            if not os.path.exists(local_path):
-                img_url = base_url + img_name
-                try:
-                    img_data = requests.get(img_url, timeout=10).content
-                    with open(local_path, 'wb') as handler:
-                        handler.write(img_data)
-                    downloaded += 1
-                except Exception as e:
-                    print(f"\n下载失败 {img_name}: {e}")
-                    failed += 1
+            if self._download_single_image(img_name):
+                downloaded += 1
+            else:
+                failed += 1
         
         print(f"\n下载完成！")
         print(f"成功下载: {downloaded} 张")
