@@ -54,24 +54,31 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
             # 梯度累积
             loss = loss / grad_accum_steps
 
-        scaler.scale(loss).backward()      
+        loss.backward()
 
         # 每累积 grad_accum_steps 步更新一次参数
         if (batch_idx + 1) % grad_accum_steps == 0:
             # 1. 直接进行 unscale_（只做一次，不要放进 try 里）
             # 这是为了让 clip_grad_norm_ 能看到正确的梯度值
-            scaler.unscale_(optimizer)
+            # scaler.unscale_(optimizer)
             
-            # 2. 梯度裁剪
+            # # 2. 梯度裁剪
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # # 3. 注意这里！不要直接用 scaler.step(optimizer)
+            # # 因为你已经手动 unscale 过了，有些版本的 PyTorch 会在这里冲突
+            # # 正确的做法是直接用 optimizer.step()，或者确保 scaler 只在未 unscale 时调用
+            
+            # # --- 方案 A：最稳妥的兼容写法 ---
+            # scaler.step(optimizer) 
+            # scaler.update()
+            # optimizer.zero_grad()
+            # scheduler.step()
+            # 直接裁剪梯度（此时梯度是 FP16，但手动裁剪没问题）
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
-            # 3. 注意这里！不要直接用 scaler.step(optimizer)
-            # 因为你已经手动 unscale 过了，有些版本的 PyTorch 会在这里冲突
-            # 正确的做法是直接用 optimizer.step()，或者确保 scaler 只在未 unscale 时调用
-            
-            # --- 方案 A：最稳妥的兼容写法 ---
-            scaler.step(optimizer) 
-            scaler.update()
+            # 直接更新，不用 scaler.step
+            optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
         
