@@ -14,6 +14,7 @@ import logging
 import os
 from datetime import datetime
 from tqdm import tqdm
+import argparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -189,15 +190,25 @@ def train_model(
 
 def main():
     # 配置参数
+    parser = argparse.ArgumentParser(description="Train VLMPretrainedModel")
+    parser.add_argument("--data_dir", type=str, default="./llava_data", help="Path to the dataset directory")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for optimizer")
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for optimizer")
+    parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Warmup ratio for learning rate scheduler")
+    parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
+    args = parser.parse_args()
+
     config = {
-        'data_dir': "./llava_data",
-        'batch_size': 4,
-        'num_epochs': 3,
-        'learning_rate': 1e-4,
-        'weight_decay': 0.01,
-        'warmup_ratio': 0.1,
+        'data_dir': args.data_dir,
+        'batch_size': args.batch_size,
+        'num_epochs': args.num_epochs,
+        'learning_rate': args.learning_rate,
+        'weight_decay': args.weight_decay,
+        'warmup_ratio': args.warmup_ratio,
         'grad_accum_steps': 4,
-        'checkpoint_dir': "./checkpoints"
+        'checkpoint_dir': args.checkpoint_dir
     }
     
     # 设备配置
