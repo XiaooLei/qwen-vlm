@@ -214,6 +214,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train VLMPretrainedModel")
     parser.add_argument("--data_dir", type=str, default="./llava_data", help="Path to the dataset directory")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--sample_size", type=int, default=20000, help="Sample size for training")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for optimizer")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for optimizer")
@@ -229,7 +230,8 @@ def main():
         'weight_decay': args.weight_decay,
         'warmup_ratio': args.warmup_ratio,
         'grad_accum_steps': 4,
-        'checkpoint_dir': args.checkpoint_dir
+        'checkpoint_dir': args.checkpoint_dir,
+        'sample_size': args.sample_size
     }
     
     # 设备配置
@@ -263,7 +265,7 @@ def main():
     train_dataset = LLaVADataset(
         data_dir=config['data_dir'],
         is_train=True,
-        sample_size=1000
+        sample_size=config['sample_size']
     )
     train_dataset.load()
     
