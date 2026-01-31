@@ -62,7 +62,6 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
 
         # 每累积 grad_accum_steps 步更新一次参数
         if (batch_idx + 1) % grad_accum_steps == 0:
-            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             # B. 使用 scaler.step 而不是 optimizer.step
             scaler.step(optimizer)
