@@ -48,12 +48,12 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
         labels = batch["labels"].to(device)
         
         # 开启自动混合精度上下文
-        with autocast(device_type='cuda', dtype=torch.float16):  
+        with autocast():  
             outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
             loss = outputs.loss
             # 梯度累积
             loss = loss / grad_accum_steps
-            
+
         scaler.scale(loss).backward()      
 
         # 4. 梯度裁剪（非常重要，防止 Loss 爆炸）
