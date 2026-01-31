@@ -38,7 +38,7 @@ class VLMModel(torch.nn.Module):
         if projector_params is not None:
             self.projector.load_state_dict(projector_params)
 
-        self.projector.to(device)
+        self.projector.to(device, dtype=torch.float16)
 
 
     def forward(self, input_ids, pixel_values, labels=None):
