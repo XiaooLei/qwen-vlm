@@ -9,7 +9,7 @@ else:
     device = "cpu"
 
 
-target_dtype = torch.float16
+target_dtype = torch.float32
 
 class VLMModel(torch.nn.Module):
     def __init__(self, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch16", projector_params=None):

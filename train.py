@@ -48,7 +48,7 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
         labels = batch["labels"].to(device)
         
         # 开启自动混合精度上下文
-        with autocast():  
+        with torch.amp.autocast('cuda', dtype=torch.float16): # 这里才是真正触发 T4 加速的地方
             outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
             loss = outputs.loss
             # 梯度累积
