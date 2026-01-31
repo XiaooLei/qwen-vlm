@@ -15,6 +15,7 @@ import os
 from datetime import datetime
 from tqdm import tqdm
 import argparse
+from torch.cuda.amp import autocast, GradScaler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +24,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
+scaler = GradScaler() # 1. 初始化缩放器
 def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch, grad_accum_steps=4):
     """训练一个 epoch"""
     model.train()
@@ -39,22 +42,39 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
     )
     
     for batch_idx, batch in progress_bar:
+
         input_ids = batch["input_ids"].to(device)
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["labels"].to(device)
         
-        outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
-        loss = outputs.loss
-        
-        # 梯度累积
-        loss = loss / grad_accum_steps
-        loss.backward()
-        
+        # 开启自动混合精度上下文
+        with autocast(device_type='cuda', dtype=torch.float16):  
+            outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
+            loss = outputs.loss
+            # 梯度累积
+            loss = loss / grad_accum_steps
+            
+        scaler.scale(loss).backward()      
+
+        # 4. 梯度裁剪（非常重要，防止 Loss 爆炸）
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  
+
         # 每累积 grad_accum_steps 步更新一次参数
         if (batch_idx + 1) % grad_accum_steps == 0:
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            # B. 使用 scaler.step 而不是 optimizer.step
+            scaler.step(optimizer)
+            
+            # C. 更新缩放因子
+            scaler.update()
+            
+            # D. 清空梯度
             optimizer.zero_grad()
+            
+            # E. 如果有 scheduler，通常在这里更新
+            scheduler.step()
         
         current_loss = loss.item() * grad_accum_steps
         total_loss += current_loss
@@ -116,6 +136,9 @@ def save_checkpoint(model, optimizer, scheduler, epoch, loss, checkpoint_dir):
     
     logger.info(f"Checkpoint saved to {checkpoint_path}")
 
+
+
+from torch.cuda.amp import autocast, GradScaler
 
 def train_model(
     model,
