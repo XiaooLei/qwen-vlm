@@ -56,13 +56,12 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
 
         scaler.scale(loss).backward()      
 
-        # 4. 梯度裁剪（非常重要，防止 Loss 爆炸）
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  
-
         # 每累积 grad_accum_steps 步更新一次参数
         if (batch_idx + 1) % grad_accum_steps == 0:
+            # 4. 梯度裁剪（非常重要，防止 Loss 爆炸）
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             # B. 使用 scaler.step 而不是 optimizer.step
             scaler.step(optimizer)
             
