@@ -1,0 +1,298 @@
+
+"""
+VLM 视觉语言模型训练脚本
+适配 LLaVA 格式数据集
+"""
+
+from model import VLMModel
+from data_set import LLaVADataset
+from torch.utils.data import DataLoader
+import torch
+import torch.optim as optim
+from torch.optim.lr_scheduler import LinearLR
+import logging
+import os
+from datetime import datetime
+from tqdm import tqdm
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch, grad_accum_steps=4):
+    """训练一个 epoch"""
+    model.train()
+    total_loss = 0
+    num_batches = len(train_dataloader)
+    
+    optimizer.zero_grad()
+    
+    progress_bar = tqdm(
+        enumerate(train_dataloader), 
+        total=num_batches, 
+        desc=f"Epoch {epoch}",
+        ncols=120
+    )
+    
+    for batch_idx, batch in progress_bar:
+        input_ids = batch["input_ids"].to(device)
+        pixel_values = batch["pixel_values"].to(device)
+        labels = batch["labels"].to(device)
+        
+        outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
+        loss = outputs.loss
+        
+        # 梯度累积
+        loss = loss / grad_accum_steps
+        loss.backward()
+        
+        # 每累积 grad_accum_steps 步更新一次参数
+        if (batch_idx + 1) % grad_accum_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            optimizer.zero_grad()
+        
+        current_loss = loss.item() * grad_accum_steps
+        total_loss += current_loss
+        
+        # 更新进度条
+        progress_bar.set_postfix({
+            'loss': f'{current_loss:.4f}',
+            'lr': f'{scheduler.get_last_lr()[0]:.2e}'
+        })
+        
+        # 每 100 个 batch 记录日志
+        if batch_idx % 100 == 0:
+            logger.info(f"Epoch {epoch} - Batch {batch_idx}/{num_batches} - Loss: {current_loss:.4f}")
+    
+    # 处理剩余的梯度
+    if (batch_idx + 1) % grad_accum_steps != 0:
+        optimizer.step()
+        optimizer.zero_grad()
+    
+    avg_loss = total_loss / num_batches
+    logger.info(f"Epoch {epoch} completed - Average Training Loss: {avg_loss:.4f}")
+    
+    return avg_loss
+
+
+def evaluate(model, val_dataloader, device, epoch):
+    """验证模型"""
+    model.eval()
+    total_loss = 0
+    num_batches = len(val_dataloader)
+    
+    with torch.no_grad():
+        for batch in tqdm(val_dataloader, desc=f"Evaluating Epoch {epoch}", ncols=120):
+            input_ids = batch["input_ids"].to(device)
+            pixel_values = batch["pixel_values"].to(device)
+            labels = batch["labels"].to(device)
+            
+            outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
+            total_loss += outputs.loss.item()
+    
+    avg_loss = total_loss / num_batches
+    logger.info(f"Epoch {epoch} - Validation Loss: {avg_loss:.4f}")
+    
+    return avg_loss
+
+
+def save_checkpoint(model, optimizer, scheduler, epoch, loss, checkpoint_dir):
+    """保存检查点"""
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
+    
+    torch.save({
+        'epoch': epoch,
+        'projector_state_dict': model.projector.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'loss': loss,
+    }, checkpoint_path)
+    
+    logger.info(f"Checkpoint saved to {checkpoint_path}")
+
+
+def train_model(
+    model,
+    train_dataloader,
+    val_dataloader,
+    optimizer,
+    scheduler,
+    device,
+    num_epochs=3,
+    checkpoint_dir="./checkpoints"
+):
+    """完整的训练流程"""
+    best_val_loss = float('inf')
+    train_losses = []
+    val_losses = []
+    
+    logger.info("=" * 60)
+    logger.info("Starting Training...")
+    logger.info(f"Training samples: {len(train_dataloader.dataset)}")
+    logger.info(f"Validation samples: {len(val_dataloader.dataset)}")
+    logger.info(f"Epochs: {num_epochs}")
+    logger.info("=" * 60)
+    
+    for epoch in range(num_epochs):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Epoch {epoch + 1}/{num_epochs}")
+        logger.info(f"Learning Rate: {scheduler.get_last_lr()[0]:.2e}")
+        logger.info(f"{'='*60}")
+        
+        # 训练
+        train_loss = train_one_epoch(
+            model, train_dataloader, optimizer, scheduler, device, epoch
+        )
+        train_losses.append(train_loss)
+        
+        # 更新学习率
+        scheduler.step()
+        
+        # 验证
+        if val_dataloader is not None:
+            val_loss = evaluate(model, val_dataloader, device, epoch)
+            val_losses.append(val_loss)
+            
+            # 保存最佳模型
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                save_checkpoint(model.projector, optimizer, scheduler, epoch, val_loss, checkpoint_dir)
+                # 同时保存最佳模型
+                best_model_path = os.path.join(checkpoint_dir, "projector.pt")
+                torch.save(model.projector.state_dict(), best_model_path)
+                logger.info(f"New best model saved with validation loss: {val_loss:.4f}")
+        
+        # 每个 epoch 保存检查点
+        save_checkpoint(model, optimizer, scheduler, epoch, train_loss, checkpoint_dir)
+    
+    # 保存最终模型
+    final_model_path = os.path.join(checkpoint_dir, "final_model.pt")
+    torch.save(model.state_dict(), final_model_path)
+    logger.info(f"Final model saved to {final_model_path}")
+    
+    # 训练总结
+    logger.info("\n" + "=" * 60)
+    logger.info("Training Summary")
+    logger.info("=" * 60)
+    logger.info(f"Final Training Loss: {train_losses[-1]:.4f}")
+    if val_losses:
+        logger.info(f"Best Validation Loss: {best_val_loss:.4f}")
+    logger.info(f"Checkpoints saved to: {checkpoint_dir}")
+    
+    return model
+
+
+def main():
+    # 配置参数
+    config = {
+        'data_dir': "./llava_data",
+        'batch_size': 4,
+        'num_epochs': 3,
+        'learning_rate': 1e-4,
+        'weight_decay': 0.01,
+        'warmup_ratio': 0.1,
+        'grad_accum_steps': 4,
+        'checkpoint_dir': "./checkpoints"
+    }
+    
+    # 设备配置
+    if torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+    logger.info(f"Using device: {device}")
+    
+    # 初始化模型
+    logger.info("Loading model...")
+
+
+    projector_path = os.path.join(config['checkpoint_dir'], "projector.pt")
+    if os.path.exists(projector_path):
+        projector_params = torch.load(projector_path)
+    else:
+        projector_params = None
+
+    model = VLMModel(projector_params=projector_params)
+    model = model.to(device)
+    
+    # 计算参数数量
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Total parameters: {total_params:,}")
+    logger.info(f"Trainable parameters: {trainable_params:,}")
+    
+    # 加载数据集
+    logger.info("Loading datasets...")
+    train_dataset = LLaVADataset(
+        data_dir=config['data_dir'],
+        is_train=True,
+        sample_size=1000
+    )
+    train_dataset.load()
+    
+    val_dataset = LLaVADataset(
+        data_dir=config['data_dir'],
+        is_train=False,
+        sample_size=100
+    )
+    val_dataset.load()
+    
+    # 创建 DataLoader
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=config['batch_size'],
+        shuffle=True,
+        num_workers=0,
+        pin_memory=True
+    )
+    
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=config['batch_size'],
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True
+    )
+    
+    logger.info(f"Train batches per epoch: {len(train_dataloader)}")
+    logger.info(f"Val batches per epoch: {len(val_dataloader)}")
+    
+    # 优化器
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=config['learning_rate'],
+        weight_decay=config['weight_decay']
+    )
+    
+    # 学习率调度器
+    total_steps = len(train_dataloader) * config['num_epochs']
+    warmup_steps = int(total_steps * config['warmup_ratio'])
+    
+    scheduler = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        total_iters=total_steps
+    )
+    
+    # 开始训练
+    trained_model = train_model(
+        model=model,
+        train_dataloader=train_dataloader,
+        val_dataloader=val_dataloader,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        num_epochs=config['num_epochs'],
+        checkpoint_dir=config['checkpoint_dir']
+    )
+    
+    logger.info("Training completed successfully!")
+
+
+if __name__ == "__main__":
+    main()

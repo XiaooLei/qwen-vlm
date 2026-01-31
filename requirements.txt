@@ -1,0 +1,4 @@
+oss2
+transformers
+addict==2.4.0
+datasets==2.14.0
