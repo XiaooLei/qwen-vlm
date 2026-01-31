@@ -11,7 +11,7 @@ else:
 
 
 class VLMModel(torch.nn.Module):
-    def __init__(self, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-large-patch14", projector_params=None):
+    def __init__(self, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch32", projector_params=None):
         super().__init__()
         self.llm_name = llm_name
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
