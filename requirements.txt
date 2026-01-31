@@ -1,4 +1,9 @@
-oss2
-transformers
-addict==2.4.0
+torch>=2.0.0
+transformers>=4.35.0
+tqdm
+Pillow
+requests
 datasets==2.14.0
+huggingface-hub
+accelerate
+numpy
