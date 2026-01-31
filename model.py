@@ -35,6 +35,7 @@ class VLMModel(torch.nn.Module):
 
         self.projector = self.projector = torch.nn.Sequential(
             torch.nn.Linear(768, 2048),      # 第一层：先映射到更高维度进行特征提取
+            torch.nn.LayerNorm(2048),
             torch.nn.GELU(),                # 非线性激活
             torch.nn.Linear(2048, 896)       # 第二层：映射到 LLM 的隐藏层维度
         ).to(dtype=target_dtype, device=device)
