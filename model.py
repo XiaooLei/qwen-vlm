@@ -17,13 +17,13 @@ class VLMModel(torch.nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
         self.language_model = AutoModelForCausalLM.from_pretrained(
             llm_name,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float16,
             device_map=device,
         )
 
         self.vision_encoder = CLIPVisionModel.from_pretrained(
             vision_name,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float16,
             device_map=device
         )
     
