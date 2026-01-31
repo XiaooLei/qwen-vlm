@@ -160,7 +160,6 @@ class LLaVADataset(Dataset):
         # 加载 JSON 文件
         with open(self.annotations_file, 'r', encoding='utf-8') as f:
             self.data = json.load(f)
-        self.ensure_sample_data_exists()
         logger.info(f"数据集加载成功，共 {self.__len__()} 个样本")
         return self.data
     

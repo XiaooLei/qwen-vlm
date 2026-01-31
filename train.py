@@ -268,6 +268,7 @@ def main():
         sample_size=config['sample_size']
     )
     train_dataset.load()
+    train_dataset.ensure_sample_data_exists()
     
     val_dataset = LLaVADataset(
         data_dir=config['data_dir'],
