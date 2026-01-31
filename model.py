@@ -39,6 +39,17 @@ class VLMModel(torch.nn.Module):
             torch.nn.Linear(2048, 896)       # 第二层：映射到 LLM 的隐藏层维度
         ).to(dtype=target_dtype, device=device)
 
+
+        def init_weights(m):
+            if isinstance(m, torch.nn.Linear):
+                # 使用更小的标准差进行初始化，比如 0.01 或 0.02
+                torch.nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    torch.nn.init.zeros_(m.bias)
+
+        # 默认加载 projector 权重
+        self.projector.apply(init_weights)
+
         # 加载 projector 参数
         if projector_params is not None:
             self.projector.load_state_dict(projector_params)
