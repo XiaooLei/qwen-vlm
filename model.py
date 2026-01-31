@@ -18,7 +18,7 @@ class VLMModel(torch.nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
         self.language_model = AutoModelForCausalLM.from_pretrained(
             llm_name,
-            torch_dtype=target_dtype,
+            dtype=target_dtype,
             device_map=device,
             attn_implementation="sdpa", 
             # 节省显存的进阶配置
@@ -27,7 +27,7 @@ class VLMModel(torch.nn.Module):
 
         self.vision_encoder = CLIPVisionModel.from_pretrained(
             vision_name,
-            torch_dtype=target_dtype,
+            dtype=target_dtype, 
             device_map=device
         )
     
