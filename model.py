@@ -33,10 +33,11 @@ class VLMModel(torch.nn.Module):
     
         self.vision_processor = CLIPImageProcessor.from_pretrained(vision_name)
 
-        self.projector = torch.nn.Linear(
-            self.vision_encoder.config.hidden_size,
-            self.language_model.config.hidden_size
-        )
+        self.projector = self.projector = torch.nn.Sequential(
+            torch.nn.Linear(768, 2048),      # 第一层：先映射到更高维度进行特征提取
+            torch.nn.GELU(),                # 非线性激活
+            torch.nn.Linear(2048, 896)       # 第二层：映射到 LLM 的隐藏层维度
+        ).to(dtype=target_dtype, device=device)
 
         # 加载 projector 参数
         if projector_params is not None:
