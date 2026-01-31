@@ -5,11 +5,14 @@ import torch
 
 if torch.cuda.is_available():
     device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
 else:
     device = "cpu"
 
 
-target_dtype = torch.float32
+
+target_dtype = torch.bfloat16
 
 class VLMModel(torch.nn.Module):
     def __init__(self, llm_name="Qwen/Qwen2.5-0.5B", vision_name="openai/clip-vit-base-patch16", projector_params=None):
