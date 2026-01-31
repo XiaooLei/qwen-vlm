@@ -41,7 +41,13 @@ class VLMModel(torch.nn.Module):
         # 加载 projector 参数
         if projector_params is not None:
             self.projector.load_state_dict(projector_params)
-
+        
+        for param in self.language_model.parameters():
+            param.requires_grad = False
+        for param in self.vision_encoder.parameters():
+            param.requires_grad = False
+        
+        # 只留 self.projector 训练  
         self.projector.to(device, dtype=target_dtype)
 
 
