@@ -60,9 +60,15 @@ class LLaVADataset(Dataset):
         # 处理图像
         image_path = sample.get('image_path')
         if image_path and os.path.exists(image_path):
-            image = Image.open(image_path).convert('RGB')
-            pixel_values = self.image_processor(images=image, return_tensors="pt").pixel_values.squeeze(0)
-            pixel_values = pixel_values.to(torch.bfloat16)
+            try:
+                image = Image.open(image_path).convert('RGB')
+                pixel_values = self.image_processor(images=image, return_tensors="pt").pixel_values.squeeze(0)
+                pixel_values = pixel_values.to(torch.bfloat16)
+            except Exception as e:
+                # 如果图像无法打开（如损坏或格式不正确），返回零张量
+                print(f"警告: 无法打开图片 {image_path}: {e}")
+                pixel_values = torch.zeros(3, 224, 224)  # CLIP默认尺寸
+                pixel_values = pixel_values.to(torch.bfloat16)  
         else:
             # 如果图像不存在，返回零张量
             pixel_values = torch.zeros(3, 224, 224)  # CLIP默认尺寸
