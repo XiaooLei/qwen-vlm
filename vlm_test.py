@@ -35,7 +35,7 @@ def run_test():
 
     # /Users/admin/Desktop/workspace/ai/nlp-beginer/lab6-vlm/checkpoints/projector_final_qwen2.5-0.5b-instruct_clip-vit-base-patch16.pt
     # 测试图片路径
-    test_image_path = "./llava_data/train2017/000000000086.jpg" 
+    test_image_path = "./llava_data/train2017/000000000081.jpg" 
     
     # 自动选择设备
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -83,4 +83,4 @@ def run_test():
     print("测试完成！")
 
 if __name__ == "__main__":
-    encode_test()
+    run_test()

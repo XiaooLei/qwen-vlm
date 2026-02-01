@@ -43,6 +43,10 @@ class LLaVADataset(Dataset):
         
         # 初始化tokenizer和image processor
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
+
+        # 【必须添加这行】确保 Dataset 编码出来的 ID 和模型找的 ID 一致
+        self.tokenizer.add_tokens(["<image>"], special_tokens=True)
+
         self.image_processor = CLIPImageProcessor.from_pretrained(vision_name)
         
         # 如果tokenizer没有pad_token，则设置为eos_token
@@ -117,7 +121,7 @@ class LLaVADataset(Dataset):
         Returns:
             input_ids, attention_mask, labels
         """
-        conversations = sample['conversations']
+        conversations = sample['conversations'][:2]
         text = self._build_conversation_text(conversations)
         
         # 编码文本
@@ -125,7 +129,7 @@ class LLaVADataset(Dataset):
             text,
             truncation=True,
             padding='max_length',
-            max_length=512,
+            max_length=256,
             return_tensors='pt'
         )
         

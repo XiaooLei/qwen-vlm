@@ -220,8 +220,8 @@ def main():
     # 配置参数
     parser = argparse.ArgumentParser(description="Train VLMPretrainedModel")
     parser.add_argument("--data_dir", type=str, default="./llava_data", help="Path to the dataset directory")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
-    parser.add_argument("--sample_size", type=int, default=20000, help="Sample size for training")
+    parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
+    parser.add_argument("--sample_size", type=int, default=10000, help="Sample size for training")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--llm_name", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="LLM model name")
     parser.add_argument("--vision_name", type=str, default="openai/clip-vit-base-patch16", help="Vision model name")
@@ -270,6 +270,9 @@ def main():
 
     model = VLMModel(llm_name=config['llm_name'], vision_name=config['vision_name'], projector_params=projector_params)
     model = model.to(device)
+
+    model.tokenizer.add_tokens(["<|image|>"], special_tokens=True)
+    model.language_model.resize_token_embeddings(len(model.tokenizer))
 
     # 计算参数数量
     total_params = sum(p.numel() for p in model.parameters())
@@ -339,7 +342,6 @@ def main():
         interrupt_checkpoint_path = os.path.join(config['checkpoint_dir'], f"projector_interrupt_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
         torch.save(model.projector.state_dict(), interrupt_checkpoint_path)
         logger.info(f"中断时权重已保存到: {interrupt_checkpoint_path}")
-        exit(0)
     
     # 注册信号处理器
     signal.signal(signal.SIGINT, save_on_interrupt)
