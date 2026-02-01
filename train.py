@@ -63,7 +63,8 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
         enumerate(train_dataloader), 
         total=num_batches, 
         desc=f"Epoch {epoch}",
-        ncols=120
+        ncols=120,
+        mininterval=10.0  # 每 10 秒才更新一次进度条，大幅减少日志行数
     )
     
     for batch_idx, batch in progress_bar:
