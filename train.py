@@ -160,6 +160,9 @@ def train_model(
     checkpoint_dir="./checkpoints",
     config=None
 ):
+
+    # 先确定checkpoint_dir目录存在
+    os.makedirs(checkpoint_dir, exist_ok=True)
     """完整的训练流程"""
     best_val_loss = float('inf')
     train_losses = []
@@ -263,6 +266,7 @@ def main():
 
     projector_path = os.path.join(config['checkpoint_dir'], f"projector_best_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
     if os.path.exists(projector_path):
+        logger.info(f"从 {projector_path} 加载 projector 参数")
         projector_params = torch.load(projector_path)
     else:
         projector_params = None
