@@ -2,13 +2,40 @@ import torch
 from PIL import Image
 import os
 from model import VLMModel  # 确保你的类定义在 model.py 中
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+model_name = "Qwen/Qwen2.5-0.5B"
+
+
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# load the tokenizer and the model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    torch_dtype="auto",
+    device_map=device,
+)
+
+
+
+
+def encode_test():
+    ids = tokenizer.encode("<image>", add_special_tokens=False)
+    print(f"ID序列: {ids}") 
+# 结果通常是：[1350, 9631, 1352]  (对应 '<', 'image', '>')
+
 
 def run_test():
     # --- 1. 配置参数 ---
     # 指向你明早跑出来的最强权重
-    checkpoint_path = "./checkpoints/projector.pt" 
+    checkpoint_path = "./checkpoints/projector_final_qwen2.5-0.5b-instruct_clip-vit-base-patch16.pt" 
+
+    # /Users/admin/Desktop/workspace/ai/nlp-beginer/lab6-vlm/checkpoints/projector_final_qwen2.5-0.5b-instruct_clip-vit-base-patch16.pt
     # 测试图片路径
-    test_image_path = "./llava_data/train2017/000000000081.jpg" 
+    test_image_path = "./llava_data/train2017/000000000086.jpg" 
     
     # 自动选择设备
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -40,8 +67,6 @@ def run_test():
     # --- 4. 开始提问 ---
     test_questions = [
         "What is in this image?",
-        "Describe the cat and its environment.",
-        "What color is the object in the picture?"
     ]
 
     print("\n" + "="*30)
@@ -50,15 +75,12 @@ def run_test():
 
     for i, q in enumerate(test_questions):
         print(f"\n[问题 {i+1}]: {q}")
-        try:
-            # 直接调用你集成在类里的 answer 方法
-            response = model.answer(image, q, max_new_tokens=128)
-            print(f"AI 回复: {response}")
-        except Exception as e:
-            print(f"❌ 推理出错: {e}")
+        # 直接调用你集成在类里的 answer 方法
+        response = model.answer(image, q, max_new_tokens=128)
+        print(f"AI 回复: {response}")
 
     print("\n" + "="*30)
     print("测试完成！")
 
 if __name__ == "__main__":
-    run_test()
+    encode_test()

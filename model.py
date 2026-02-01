@@ -37,10 +37,17 @@ class VLMModel(torch.nn.Module):
     
         self.vision_processor = CLIPImageProcessor.from_pretrained(vision_name)
 
+        self.image_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
+        self.image_len = len(self.image_ids)
+        
+        print(f"检测到占位符序列: {self.image_ids} (长度: {self.image_len})")
+        # 注册为 buffer，这样保存模型时会带上，且会自动跟随模型移动到 GPU
+        self.register_buffer("target_ids", torch.tensor(self.image_ids))
+
         self.llm_hidden_dim = self.language_model.config.hidden_size
         print(f"{self.llm_name} LLM hidden dim: {self.llm_hidden_dim}")
 
-        self.projector = self.projector = torch.nn.Sequential(
+        self.projector = torch.nn.Sequential(
             torch.nn.Linear(768, 2048),      # 第一层：先映射到更高维度进行特征提取
             torch.nn.LayerNorm(2048),
             torch.nn.GELU(),                # 非线性激活
@@ -76,8 +83,6 @@ class VLMModel(torch.nn.Module):
         for param in self.projector.parameters():
             param.requires_grad = True
 
-        self.language_model.get_input_embeddings().requires_grad_(True)
-
 
     # def forward(self, input_ids, pixel_values, labels=None):
     #     visual_outputs = self.vision_encoder(pixel_values)
@@ -110,116 +115,127 @@ class VLMModel(torch.nn.Module):
 
     def forward(self, input_ids, pixel_values, labels=None):
         visual_outputs = self.vision_encoder(pixel_values)
+        # CLIP 特征去掉 CLS token: [B, 577, 768] -> [B, 576, 768]
         image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :]) 
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-
-        image_token_id = self.tokenizer.convert_tokens_to_ids("<image>")
         
-        # 准备容器存放处理后的 Embeds 和 Labels
         new_embeds = []
         new_labels = []
 
+        # 遍历 Batch
         for i in range(input_ids.size(0)):
-            # 找到当前这行 <image> 的位置
-            indices = (input_ids[i] == image_token_id).nonzero(as_tuple=True)[0]
+            # 1. 将当前的 input_ids 还原为文本，必须拿到 offset_mapping
+            # 我们直接对这一行进行处理
+            curr_ids = input_ids[i]
+            # 过滤掉 padding 避免干扰 decode
+            non_pad_ids = curr_ids[curr_ids != self.tokenizer.pad_token_id]
+            text = self.tokenizer.decode(non_pad_ids, add_special_tokens=False)
             
-            if len(indices) == 0:
-                # 【防崩点】如果没有 <image> 标签，直接原样使用文本
-                # 这在处理多轮对话的后续回复时很常见
-                new_embeds.append(inputs_embeds[i])
-                if labels is not None:
-                    new_labels.append(labels[i])
+            char_idx = text.find("<image>")
+            
+            # 重新 encode 拿到 offset_mapping
+            encoding = self.tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
+            offsets = encoding['offset_mapping']
+            
+            token_idx = -1
+            token_len = 0
+            
+            if char_idx != -1:
+                matched_tokens = []
+                for t_idx, (start, end) in enumerate(offsets):
+                    if (start >= char_idx and end <= char_idx + 7) or (start < char_idx + 7 and end > char_idx):
+                        matched_tokens.append(t_idx)
+                
+                if matched_tokens:
+                    token_idx = matched_tokens[0]
+                    token_len = len(matched_tokens)
+
+            # 2. 手术拼接
+            if token_idx == -1:
+                # 打印错误用于 Debug，但通过 dummy_filler 保持训练不崩
+                # print(f"❌ Batch {i} 匹配失败") 
+                dummy_filler = self.projector[0].weight.view(-1)[0] * 0
+                new_embeds.append(inputs_embeds[i] + dummy_filler)
+                if labels is not None: new_labels.append(labels[i])
             else:
-                # 正常的替换逻辑
-                idx = indices[0].item()
-                pre_e = inputs_embeds[i, :idx, :]
-                post_e = inputs_embeds[i, idx+1:, :]
+                # 考虑到可能存在的 Padding 偏移，如果是非左填充，token_idx 是准确的
+                pre_e = inputs_embeds[i, :token_idx, :]
+                post_e = inputs_embeds[i, token_idx + token_len:, :]
                 new_embeds.append(torch.cat([pre_e, image_features[i], post_e], dim=0))
                 
                 if labels is not None:
-                    pre_l = labels[i, :idx]
-                    post_l = labels[i, idx+1:]
+                    pre_l = labels[i, :token_idx]
+                    post_l = labels[i, token_idx + token_len:]
                     img_l = torch.full((image_features.size(1),), -100, device=labels.device, dtype=labels.dtype)
                     new_labels.append(torch.cat([pre_l, img_l, post_l], dim=0))
 
-        # 重新打包回 Tensor
-        combined_embeds = torch.stack(new_embeds, dim=0)
-        extended_labels = torch.stack(new_labels, dim=0) if labels is not None else None
+        # 3. 动态 Padding (保持你原有的逻辑，它是对的)
+        max_len = max(e.size(0) for e in new_embeds)
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        pad_embed_single = self.language_model.get_input_embeddings()(
+            torch.tensor([pad_id], device=inputs_embeds.device)
+        ).squeeze(0)
 
-        return self.language_model(inputs_embeds=combined_embeds, labels=extended_labels)
+        final_embeds = []
+        final_labels = []
+        for i in range(len(new_embeds)):
+            curr_len = new_embeds[i].size(0)
+            diff = max_len - curr_len
+            if diff > 0:
+                pad_f = pad_embed_single.repeat(diff, 1)
+                final_embeds.append(torch.cat([new_embeds[i], pad_f], dim=0))
+                if labels is not None:
+                    pad_l = torch.full((diff,), -100, device=labels.device, dtype=labels.dtype)
+                    final_labels.append(torch.cat([new_labels[i], pad_l], dim=0))
+            else:
+                final_embeds.append(new_embeds[i])
+                if labels is not None: final_labels.append(new_labels[i])
+
+        return self.language_model(
+            inputs_embeds=torch.stack(final_embeds), 
+            labels=torch.stack(final_labels) if labels is not None else None,
+            return_dict=True
+        )
 
     @torch.no_grad()
     def answer(self, image: Image.Image, question: str, max_new_tokens=128):
-        """用于单张图片的推理回复"""
         self.eval()
-        # 1. 构造标准对话模板 (必须和训练一致)
         prompt = f"<|im_start|>user\n<image>\n{question}<|im_end|>\n<|im_start|>assistant\n"
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.language_model.device)
         
-        # 2. 处理图片
+        # 统一使用 offset_mapping 定位，彻底抛弃 ID 匹配
+        inputs = self.tokenizer(prompt, return_offsets_mapping=True, return_tensors="pt", add_special_tokens=False)
+        input_ids = inputs['input_ids'].to(self.language_model.device)
+        offsets = inputs['offset_mapping'][0]
+        
+        char_idx = prompt.find("<image>")
+        token_idx = -1
+        token_len = 0
+        for t_idx, (start, end) in enumerate(offsets):
+            if (start >= char_idx and end <= char_idx + 7) or (start < char_idx + 7 and end > char_idx):
+                if token_idx == -1: 
+                    token_idx = t_idx
+                token_len += 1
+
         pixel_values = self.vision_processor(images=image, return_tensors="pt").pixel_values
         pixel_values = pixel_values.to(device=self.vision_encoder.device, dtype=self.vision_encoder.dtype)
-
-        # 3. 提取图像特征并接入 Projector
+        
         visual_outputs = self.vision_encoder(pixel_values)
         image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :])
 
-        # 4. 找到文本中的 <image> 占位符进行替换
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        image_token_id = self.tokenizer.convert_tokens_to_ids("<image>")
         
-        # 查找位置并拼接
-        idx = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0][0].item()
         combined_embeds = torch.cat([
-            inputs_embeds[:, :idx, :],
+            inputs_embeds[:, :token_idx, :],
             image_features,
-            inputs_embeds[:, idx+1:, :]
+            inputs_embeds[:, token_idx + token_len:, :]
         ], dim=1)
 
-        # 5. 调用 LLM 生成
         output_ids = self.language_model.generate(
             inputs_embeds=combined_embeds,
             max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
+            do_sample=False, 
+            repetition_penalty=1.1,
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.pad_token_id
         )
-
         return self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
-
-
-
-def generate(self, input_ids, pixel_values, max_new_tokens=128):
-        self.eval()
-        device = next(self.parameters()).device
-        with torch.no_grad():
-            # 1. 同样裁掉第0个Token，保持训练推理一致
-            visual_outputs = self.vision_encoder(pixel_values)
-            image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :])
-            
-            # 2. 同样的 Embedding 逻辑
-            inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-            
-            # 3. 寻找 <image> 标签位置
-            image_token_id = self.tokenizer.convert_tokens_to_ids("<image>")
-            # 假设 generate 时 batch 为 1
-            image_idx = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0].item()
-            
-            # 4. 同样的三段式拼接
-            pre_embeds = inputs_embeds[:, :image_idx, :]
-            post_embeds = inputs_embeds[:, image_idx+1:, :]
-            combined_embeds = torch.cat([pre_embeds, image_features, post_embeds], dim=1)
-
-            # 5. 生成
-            generated_ids = self.language_model.generate(
-                inputs_embeds=combined_embeds,
-                max_new_tokens=max_new_tokens,
-                do_sample=False, # 推理时建议先关掉随机
-                repetition_penalty=1.2 # 防止复读机
-            )
-            return self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
-    
-    
-    

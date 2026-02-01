@@ -161,6 +161,11 @@ class LLaVADataset(Dataset):
         with open(self.annotations_file, 'r', encoding='utf-8') as f:
             self.data = json.load(f)
         logger.info(f"数据集加载成功，共 {self.__len__()} 个样本")
+
+        # 过滤没有<image>标签的样本
+        self.data = [sample for sample in self.data if '<image>' in sample['conversations'][0]['value']]
+        logger.info(f"过滤后数据集共 {self.__len__()} 个样本")
+
         return self.data
     
     def get_sample(self, index: int) -> Dict[str, Any]:

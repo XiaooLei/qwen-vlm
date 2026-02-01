@@ -48,13 +48,15 @@ def extract_model_name(model_name):
     return model_name
 
 
-scaler = GradScaler() # 1. 初始化缩放器
 def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch, grad_accum_steps=4):
-    """训练一个 epoch"""
+    """
+    训练一个 epoch (无 Scaler 全精度版)
+    """
     model.train()
     total_loss = 0
     num_batches = len(train_dataloader)
     
+    # 清空梯度
     optimizer.zero_grad()
     
     progress_bar = tqdm(
@@ -65,66 +67,60 @@ def train_one_epoch(model, train_dataloader, optimizer, scheduler, device, epoch
     )
     
     for batch_idx, batch in progress_bar:
-
+        # 将数据搬运到设备
         input_ids = batch["input_ids"].to(device)
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["labels"].to(device)
 
-        # 简化：如果是 Mac (MPS) 或 CPU，去掉 autocast 和 scaler
-        if device == "cuda":
-            with torch.amp.autocast('cuda', dtype=torch.float16):
-                outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
-                loss = outputs.loss / grad_accum_steps
-            scaler.scale(loss).backward()
-        else:
-            # Mac / CPU 路径
-            outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss / grad_accum_steps
-            # 打印调试：如果这里是 None，说明 forward 内部还是断了
-            if batch_idx == 0: 
-                print(f"DEBUG: loss grad_fn = {loss.grad_fn}")
-            loss.backward()
+        # 1. 前向传播
+        # 直接计算，不使用 autocast 和 scaler
+        outputs = model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
+        
+        # 2. 获取 Loss 并处理梯度累积
+        loss = outputs.loss / grad_accum_steps
+        
+        # 调试：检查 loss 是否有梯度链 (只需检查第一个 batch)
+        if batch_idx == 0 and epoch == 1:
+            if loss.grad_fn is None:
+                print("\n❌ 警告: Loss 没有 grad_fn! 请检查 Projector 是否开启了 requires_grad=True")
+            else:
+                print(f"\n✅ 检查成功: Loss grad_fn = {loss.grad_fn}")
 
-        # 每累积 grad_accum_steps 步更新一次参数
-        if (batch_idx + 1) % grad_accum_steps == 0:
-            # 1. 直接进行 unscale_（只做一次，不要放进 try 里）
-            # 这是为了让 clip_grad_norm_ 能看到正确的梯度值
-            # 1. 必须先 unscale 才能裁剪
-            scaler.unscale_(optimizer)
-            
-            # 2. 裁剪梯度（防止 NaN 的第二道防线）
+        # 3. 反向传播
+        loss.backward()
+
+        # 4. 更新参数逻辑 (梯度累积步)
+        if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == num_batches:
+            # 裁剪梯度，防止训练不稳定
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
-            # 3. 更新权重
-            scaler.step(optimizer)
-            scaler.update()
+            # 更新权重
+            optimizer.step()
             
-            optimizer.zero_grad()
+            # 更新学习率
             scheduler.step()
+            
+            # 清空梯度进入下一个累积周期
+            optimizer.zero_grad()
         
+        # 5. 记录日志
         current_loss = loss.item() * grad_accum_steps
         total_loss += current_loss
         
-        # 更新进度条
+        # 更新 tqdm 进度条
         progress_bar.set_postfix({
             'loss': f'{current_loss:.4f}',
             'lr': f'{scheduler.get_last_lr()[0]:.2e}'
         })
         
-        # 每 100 个 batch 记录日志
+        # 每 100 个 batch 记录一次详细日志
         if batch_idx % 100 == 0:
             logger.info(f"Epoch {epoch} - Batch {batch_idx}/{num_batches} - Loss: {current_loss:.4f}")
-    
-    # 处理剩余的梯度
-    if (batch_idx + 1) % grad_accum_steps != 0:
-        optimizer.step()
-        optimizer.zero_grad()
     
     avg_loss = total_loss / num_batches
     logger.info(f"Epoch {epoch} completed - Average Training Loss: {avg_loss:.4f}")
     
     return avg_loss
-
 
 def evaluate(model, val_dataloader, device, epoch):
     """验证模型"""
@@ -274,17 +270,6 @@ def main():
     model = VLMModel(llm_name=config['llm_name'], vision_name=config['vision_name'], projector_params=projector_params)
     model = model.to(device)
 
-
-    # 这两行一定要紧跟在初始化 model 之后，否则索引不到 <image> 会在 forward 报错！
-    model.tokenizer.add_tokens(["<image>"], special_tokens=True)
-    model.language_model.resize_token_embeddings(len(model.tokenizer))
-
-
-    print(f"DEBUG: <image> token id = {model.tokenizer.convert_tokens_to_ids('<image>')}")
-    test_text = "核心测试 <image> 结束"
-    test_ids = model.tokenizer.encode(test_text)
-    print(f"DEBUG: 编码测试 '{test_text}' -> {test_ids}")
-    
     # 计算参数数量
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
