@@ -261,7 +261,7 @@ def main():
     # 初始化模型
     logger.info("Loading model...")
 
-    projector_path = os.path.join(config['checkpoint_dir'], f"projector_{config['llm_name']}_{config['vision_name']}.pt")
+    projector_path = os.path.join(config['checkpoint_dir'], f"projector_best_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
     if os.path.exists(projector_path):
         projector_params = torch.load(projector_path)
     else:

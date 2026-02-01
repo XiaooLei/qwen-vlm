@@ -2,6 +2,7 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers import CLIPVisionModel, CLIPImageProcessor
 import torch
+from PIL import Image
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -146,6 +147,47 @@ class VLMModel(torch.nn.Module):
         extended_labels = torch.stack(new_labels, dim=0) if labels is not None else None
 
         return self.language_model(inputs_embeds=combined_embeds, labels=extended_labels)
+
+    @torch.no_grad()
+    def answer(self, image: Image.Image, question: str, max_new_tokens=128):
+        """用于单张图片的推理回复"""
+        self.eval()
+        # 1. 构造标准对话模板 (必须和训练一致)
+        prompt = f"<|im_start|>user\n<image>\n{question}<|im_end|>\n<|im_start|>assistant\n"
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.language_model.device)
+        
+        # 2. 处理图片
+        pixel_values = self.vision_processor(images=image, return_tensors="pt").pixel_values
+        pixel_values = pixel_values.to(device=self.vision_encoder.device, dtype=self.vision_encoder.dtype)
+
+        # 3. 提取图像特征并接入 Projector
+        visual_outputs = self.vision_encoder(pixel_values)
+        image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :])
+
+        # 4. 找到文本中的 <image> 占位符进行替换
+        inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
+        image_token_id = self.tokenizer.convert_tokens_to_ids("<image>")
+        
+        # 查找位置并拼接
+        idx = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0][0].item()
+        combined_embeds = torch.cat([
+            inputs_embeds[:, :idx, :],
+            image_features,
+            inputs_embeds[:, idx+1:, :]
+        ], dim=1)
+
+        # 5. 调用 LLM 生成
+        output_ids = self.language_model.generate(
+            inputs_embeds=combined_embeds,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.pad_token_id
+        )
+
+        return self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
 
 
