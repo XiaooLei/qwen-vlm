@@ -16,6 +16,8 @@ from datetime import datetime
 from tqdm import tqdm
 import argparse
 from torch.cuda.amp import autocast, GradScaler
+import signal, sys
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +25,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+
+
+def handle_interrupt(sig, frame):
+    """处理 Ctrl+C 中断"""
+    logger.info("检测到 Ctrl+C 中断信号")
+    global interrupted
+    interrupted = True
+
+
+def extract_model_name(model_name):
+    """从模型名称中提取 LLM 和 Vision 模型名称"""
+
+    # Qwen/Qwen2.5-0.5B-Instruct -> qwen2.5_0.5b_instruct
+    
+    # openai/clip-vit-base-patch32 -> openai_clip_vit_base_patch32
+    # 还要去掉前缀 openai_
+    model_name = model_name.replace("Qwen/", "")
+    model_name  = os.path.basename(model_name)
+    model_name = model_name.replace("/", "_").lower()
+    return model_name
 
 
 scaler = GradScaler() # 1. 初始化缩放器
@@ -124,23 +147,6 @@ def evaluate(model, val_dataloader, device, epoch):
     return avg_loss
 
 
-def save_checkpoint(model, optimizer, scheduler, epoch, loss, checkpoint_dir):
-    """保存检查点"""
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-    
-    torch.save({
-        'epoch': epoch,
-        'projector_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'loss': loss,
-    }, checkpoint_path)
-    
-    logger.info(f"Checkpoint saved to {checkpoint_path}")
-
-
-
 from torch.cuda.amp import autocast, GradScaler
 
 def train_model(
@@ -186,17 +192,15 @@ def train_model(
             # 保存最佳模型
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                save_checkpoint(model.projector, optimizer, scheduler, epoch, val_loss, checkpoint_dir)
                 # 同时保存最佳模型
-                best_model_path = os.path.join(checkpoint_dir, "projector.pt")
+                best_model_path = os.path.join(checkpoint_dir, f"projector_best_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
                 torch.save(model.projector.state_dict(), best_model_path)
                 logger.info(f"New best model saved with validation loss: {val_loss:.4f}")
         
-        # 每个 epoch 保存检查点
-        save_checkpoint(model.projector, optimizer, scheduler, epoch, train_loss, checkpoint_dir)
-    
+        torch.save(model.projector.state_dict(), os.path.join(checkpoint_dir, f"projector_epoch{epoch}_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt"))    
+        # 每个 epoch 保存检查点    
     # 保存最终模型
-    final_model_path = os.path.join(checkpoint_dir, f"projector_{config['llm_name']}_{config['vision_name']}_{config['sample_size']}.pt")
+    final_model_path = os.path.join(checkpoint_dir, f"projector_final_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
     torch.save(model.projector.state_dict(), final_model_path)
     logger.info(f"Final model saved to {final_model_path}")
     
@@ -257,7 +261,7 @@ def main():
     # 初始化模型
     logger.info("Loading model...")
 
-    projector_path = os.path.join(config['checkpoint_dir'], f"projector_{config['llm_name']}_{config['vision_name']}_{config['sample_size']}.pt")
+    projector_path = os.path.join(config['checkpoint_dir'], f"projector_{config['llm_name']}_{config['vision_name']}.pt")
     if os.path.exists(projector_path):
         projector_params = torch.load(projector_path)
     else:
@@ -338,6 +342,18 @@ def main():
         start_factor=0.1,
         total_iters=total_steps
     )
+    
+    # 设置中断处理
+    def save_on_interrupt(signum, frame):
+        logger.info("\n接收到中断信号，正在保存最新权重...")
+        interrupt_checkpoint_path = os.path.join(config['checkpoint_dir'], f"projector_interrupt_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
+        torch.save(model.projector.state_dict(), interrupt_checkpoint_path)
+        logger.info(f"中断时权重已保存到: {interrupt_checkpoint_path}")
+        exit(0)
+    
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, save_on_interrupt)
+    signal.signal(signal.SIGTERM, save_on_interrupt)
     
     # 开始训练
     trained_model = train_model(

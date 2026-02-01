@@ -74,7 +74,7 @@ class VLMModel(torch.nn.Module):
         # 这样做可以确保无论之前发生了什么，Projector 都是可训练的
         for param in self.projector.parameters():
             param.requires_grad = True
-            
+
         self.language_model.get_input_embeddings().requires_grad_(True)
 
 

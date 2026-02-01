@@ -23,9 +23,9 @@ def get_device():
 device = get_device()
 
 
-def generate(llm_name="Qwen/Qwen2.5-0.5B", 
+def generate(llm_name="Qwen/Qwen2.5-0.5B-Instruct", 
              vision_name="openai/clip-vit-base-patch16",
-             projector_path="checkpoints/projector1.pt",
+             projector_path="checkpoints/checkpoint_epoch_2.pt",
              image_url="http://images.cocodataset.org/val2017/000000039769.jpg",
              input_text="this is a picture of",
              max_new_tokens=100):
@@ -76,8 +76,6 @@ def generate(llm_name="Qwen/Qwen2.5-0.5B",
     image_features = model.vision_encoder(pixel_values)
     image_features = model.projector(image_features.last_hidden_state)
 
-    image_features = image_features / 200.0
-
     text_embeds = model.language_model.get_input_embeddings()(input_ids)
 
     print(f"image_features norm: {image_features.norm()}")
@@ -110,7 +108,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Test VLM Model')
     parser.add_argument('--llm', default="Qwen/Qwen2.5-0.5B", help='LLM model name')
     parser.add_argument('--vision', default="openai/clip-vit-base-patch16", help='Vision model name')
-    parser.add_argument('--projector', default="checkpoints/projector1.pt", help='Projector checkpoint path')
     parser.add_argument('--image', default="http://images.cocodataset.org/val2017/000000039769.jpg", help='Image URL')
     parser.add_argument('--text', default="The object in this image is a", help='Input text prompt')
     parser.add_argument('--max_tokens', type=int, default=100, help='Maximum new tokens to generate')
@@ -120,7 +117,6 @@ if __name__ == "__main__":
     result = generate(
         llm_name=args.llm,
         vision_name=args.vision, 
-        projector_path=args.projector,
         image_url=args.image,
         input_text=args.text,
         max_new_tokens=args.max_tokens
