@@ -143,16 +143,44 @@ class VLMModel(torch.nn.Module):
                 final_labels[i, :cur_len] = new_labels[i]
         
         # --- 临时调试代码 ---
-        #if labels is not None:
-            # 1. 检查 label 覆盖率
-            valid_mask = (final_labels != -100)
-            #print(f"Batch 有效 token 数: {valid_mask.sum().item()}")
+        # --- 临时调试代码修正版 ---
+        if labels is not None:
+            # 1. 正常的 Forward 已经拿到了 logits
+            # 这里的 logits 维度是 [B, N, Vocabulary_Size]
+            logits = self.language_model(inputs_embeds=final_embeds).logits
             
-            # 2. 看看模型到底在预测什么（只看前几个有效 token）
-            # logits = self.language_model(inputs_embeds=final_embeds).logits
-            # pred_tokens = torch.argmax(logits[valid_mask], dim=-1)
-            # target_tokens = final_labels[valid_mask]
-
+            # 2. 执行 Shift 操作，对齐预测与标签
+            # 预测序列：   [P0, P1, P2, P3] (logits 里的 0 到 n-1)
+            # 对应目标：   [L1, L2, L3, L4] (labels 里的 1 到 n)
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = final_labels[:, 1:].contiguous()
+            
+            # 3. 构造 Mask，只解码我们需要关注的（Assistant 回答且非 Padding 部分）
+            valid_mask = (shift_labels != -100)
+            
+            # 4. 随机采样打印，避免刷屏
+            if torch.rand(1).item() < 0.05: # 5% 的概率打印
+                print(f"\n" + "="*50)
+                # 找到当前 batch 中第一个有有效标签的样本
+                for i in range(batch_size):
+                    m = valid_mask[i]
+                    if m.any():
+                        # 提取预测和真实标签
+                        p_tokens = torch.argmax(shift_logits[i][m], dim=-1)
+                        t_tokens = shift_labels[i][m]
+                        
+                        # 解码成文本
+                        pred_str = self.tokenizer.decode(p_tokens, skip_special_tokens=False)
+                        target_str = self.tokenizer.decode(t_tokens, skip_special_tokens=False)
+                        
+                        print(f"【Step 调试采样】")
+                        print(f"预测文本 >> {pred_str}")
+                        print(f"实际文本 >> {target_str}")
+                        
+                        # 额外检查：对比前 5 个 token 的 ID 是否一致（直观判断对齐）
+                        # print(f"前5个Token ID对比: \nPred: {p_tokens[:5].tolist()}\nTarget: {t_tokens[:5].tolist()}")
+                        break 
+                print("="*50 + "\n")
             # print("------------------")
             # print("image token id:", self.image_token_id)
             # print(f"预测 ID 前 10 个: {pred_tokens[:10].tolist()}")
@@ -160,7 +188,7 @@ class VLMModel(torch.nn.Module):
             # exit(-1)
             
             # 3. 检查图像特征的强度
-            #print(f"Image Features Mean Abs: {image_features.abs().mean().item()}")
+            # print(f"Image Features Mean Abs: {image_features.abs().mean().item()}")
             # ------------------
         
         return self.language_model(
@@ -172,40 +200,46 @@ class VLMModel(torch.nn.Module):
     @torch.no_grad()
     def answer(self, image: Image.Image, question: str, max_new_tokens=128):
         self.eval()
-        # 严格按照训练时的格式构造 Prompt
-        prompt = f"<image>\n{question}" # 简化 prompt 结构，减少 Instruct 模型的干扰
+        
+        # 1. 严格对齐 Qwen 的 ChatML 格式
+        # 必须让模型觉得 Assistant 准备开口了
+        prompt = f"<|im_start|>user\n<image>\n{question}<|im_end|>\n<|im_start|>assistant\n"
         
         inputs = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
         input_ids = inputs['input_ids'].to(self.device)
         
-        # 推理时也使用 ID 定位
+        # 2. 定位 <image>
         image_indices = torch.where(input_ids[0] == self.image_token_id)[0]
         if len(image_indices) == 0:
             return "Error: No <image> tag found in prompt."
-        
         idx = image_indices[0]
 
+        # 3. 准备图像特征
         pixel_values = self.vision_processor(images=image, return_tensors="pt").pixel_values
         pixel_values = pixel_values.to(device=self.device, dtype=target_dtype)
-        
         visual_outputs = self.vision_encoder(pixel_values)
         image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :])
 
+        # 4. 拼接 Embeddings
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        
-        # 拼接 Embeddings
         combined_embeds = torch.cat([
             inputs_embeds[:, :idx, :],
             image_features,
             inputs_embeds[:, idx + 1:, :]
         ], dim=1)
 
+        # 5. 生成
+        # 注意：这里我们只传 inputs_embeds，不传 input_ids
         output_ids = self.language_model.generate(
             inputs_embeds=combined_embeds,
             max_new_tokens=max_new_tokens,
-            do_sample=False, 
-            repetition_penalty=1.1,
-            eos_token_id=self.tokenizer.eos_token_id,
+            do_sample=False,            # Greedy search 比较稳
+            repetition_penalty=1.2,     # 稍微加大惩罚，防止口吃
+            eos_token_id=self.tokenizer.convert_tokens_to_ids("<|im_end|>"), # 明确结束符
             pad_token_id=self.tokenizer.pad_token_id
         )
-        return self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        
+        # 6. 解码
+        # generate 返回的通常只有新生成的 token
+        response = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        return response

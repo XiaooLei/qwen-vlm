@@ -31,7 +31,7 @@ def encode_test():
 def run_test():
     # --- 1. 配置参数 ---
     # 指向你明早跑出来的最强权重
-    checkpoint_path = "./checkpoints/projector_final_qwen2.5-0.5b-instruct_clip-vit-base-patch16.pt" 
+    checkpoint_path = "./checkpoints/projector_final_qwen2.5-0.5b-instruct_clip-vit-base-patch16.pt"
 
     # /Users/admin/Desktop/workspace/ai/nlp-beginer/lab6-vlm/checkpoints/projector_final_qwen2.5-0.5b-instruct_clip-vit-base-patch16.pt
     # 测试图片路径
