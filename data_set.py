@@ -211,9 +211,9 @@ class LLaVADataset(Dataset):
             value = conv['value']
             # 根据LLaVA格式调整角色标识
             if role == 'human':
-                texts.append(f'<|im_start|>user\n{value}<|im_end|>')
+                texts.append(f'<|im_start|>user\n{value}<|im_end|>\n')
             elif role == 'gpt':
-                texts.append(f'<|im_start|>assistant\n{value}<|im_end|>')
+                texts.append(f'<|im_start|>assistant\n{value}<|im_end|>\n')
         return ''.join(texts)
 
     def get_image_path(self, image_filename: str) -> str:
