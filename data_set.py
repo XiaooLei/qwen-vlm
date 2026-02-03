@@ -121,7 +121,8 @@ class LLaVADataset(Dataset):
         Returns:
             input_ids, attention_mask, labels
         """
-        conversations = sample['conversations'][:2]
+        #conversations = sample['conversations'][:2]
+        conversations = sample['conversations']
         text = self._build_conversation_text(conversations)
         
         # 编码文本

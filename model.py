@@ -142,7 +142,6 @@ class VLMModel(torch.nn.Module):
             if labels is not None:
                 final_labels[i, :cur_len] = new_labels[i]
         
-        # --- 临时调试代码 ---
         # --- 临时调试代码修正版 ---
         if labels is not None:
             # 1. 正常的 Forward 已经拿到了 logits
@@ -198,13 +197,10 @@ class VLMModel(torch.nn.Module):
         )
 
     @torch.no_grad()
-    def answer(self, image: Image.Image, question: str, max_new_tokens=128):
+    def answer(self, image: Image.Image, prompt: str, max_new_tokens=128):
         self.eval()
-        
         # 1. 严格对齐 Qwen 的 ChatML 格式
-        # 必须让模型觉得 Assistant 准备开口了
-        prompt = f"<|im_start|>user\n<image>\n{question}<|im_end|>\n<|im_start|>assistant\n"
-        
+        # 必须让模型觉得 Assistant 准备开口了        
         inputs = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
         input_ids = inputs['input_ids'].to(self.device)
         
@@ -235,7 +231,7 @@ class VLMModel(torch.nn.Module):
             max_new_tokens=max_new_tokens,
             do_sample=False,            # Greedy search 比较稳
             repetition_penalty=1.2,     # 稍微加大惩罚，防止口吃
-            eos_token_id=self.tokenizer.convert_tokens_to_ids("<|im_end|>"), # 明确结束符
+            #eos_token_id=self.tokenizer.convert_tokens_to_ids("<|im_end|>"), # 明确结束符
             pad_token_id=self.tokenizer.pad_token_id
         )
         
@@ -243,3 +239,4 @@ class VLMModel(torch.nn.Module):
         # generate 返回的通常只有新生成的 token
         response = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
         return response
+    
