@@ -121,11 +121,11 @@ class LLaVADataset(Dataset):
         Returns:
             input_ids, attention_mask, labels
         """
-        #conversations = sample['conversations'][:2]
+        # 1. 获取对话并构建完整文本
         conversations = sample['conversations']
         text = self._build_conversation_text(conversations)
         
-        # 编码文本
+        # 2. 编码文本为token IDs
         encoding = self.tokenizer(
             text,
             truncation=True,
@@ -137,11 +137,63 @@ class LLaVADataset(Dataset):
         input_ids = encoding['input_ids'].squeeze(0)
         attention_mask = encoding['attention_mask'].squeeze(0)
         
-        # 构建标签 - 对于语言模型，通常是输入向右偏移一位
+        # 3. 初始化标签（与输入相同）
         labels = input_ids.clone()
-        # 将padding位置的标签设为-100（忽略）
+        
+        # 4. 标记padding位置为-100（忽略）
         labels[labels == self.tokenizer.pad_token_id] = -100
         
+        # 5. 遮挡不需要预测的标记部分
+        # 编码需要查找的标记
+        user_start_tokens = self.tokenizer.encode("<|im_start|>user", add_special_tokens=False)
+        assistant_start_tokens = self.tokenizer.encode("<|im_start|>assistant", add_special_tokens=False)
+        im_end_tokens = self.tokenizer.encode("<|im_end|>", add_special_tokens=False)
+        
+        # 转换为张量以便比较
+        user_start_tensor = torch.tensor(user_start_tokens, device=input_ids.device)
+        assistant_start_tensor = torch.tensor(assistant_start_tokens, device=input_ids.device)
+        im_end_tensor = torch.tensor(im_end_tokens, device=input_ids.device)
+        
+        # 遍历输入IDs，处理所有标记部分
+        idx = 0
+        while idx < len(input_ids):
+            # 检查是否找到用户部分的开始
+            if (len(input_ids) - idx) >= len(user_start_tensor):
+                if torch.equal(input_ids[idx:idx+len(user_start_tensor)], user_start_tensor):
+                    # 找到用户部分开始，查找结束标记
+                    end_idx = idx + len(user_start_tensor)
+                    while (len(input_ids) - end_idx) >= len(im_end_tensor):
+                        if torch.equal(input_ids[end_idx:end_idx+len(im_end_tensor)], im_end_tensor):
+                            # 遮挡整个用户部分（包括标记）
+                            labels[idx:end_idx+len(im_end_tensor)] = -100
+                            idx = end_idx + len(im_end_tensor)
+                            break
+                        end_idx += 1
+                    else:
+                        idx += 1
+                # 检查是否找到assistant部分的开始
+                elif (len(input_ids) - idx) >= len(assistant_start_tensor):
+                    if torch.equal(input_ids[idx:idx+len(assistant_start_tensor)], assistant_start_tensor):
+                        # 找到assistant部分开始，遮挡开始标记
+                        labels[idx:idx+len(assistant_start_tensor)] = -100
+                        # 查找结束标记
+                        end_idx = idx + len(assistant_start_tensor)
+                        while (len(input_ids) - end_idx) >= len(im_end_tensor):
+                            if torch.equal(input_ids[end_idx:end_idx+len(im_end_tensor)], im_end_tensor):
+                                # 遮挡结束标记，保留中间内容
+                                labels[end_idx:end_idx+len(im_end_tensor)] = -100
+                                idx = end_idx + len(im_end_tensor)
+                                break
+                            end_idx += 1
+                        else:
+                            idx += 1
+                    else:
+                        idx += 1
+                else:
+                    idx += 1
+            else:
+                break
+
         return input_ids, attention_mask, labels
         
     def load(self) -> List[Dict[str, Any]]:
