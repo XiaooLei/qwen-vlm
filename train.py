@@ -17,6 +17,7 @@ from tqdm import tqdm
 import argparse
 from torch.cuda.amp import autocast, GradScaler
 import signal, sys
+from torch.optim.lr_scheduler import OneCycleLR
 
 
 logging.basicConfig(
@@ -332,11 +333,16 @@ def main():
     # 学习率调度器
     total_steps = len(train_dataloader) * config['num_epochs']
     warmup_steps = int(total_steps * config['warmup_ratio'])
-    
-    scheduler = LinearLR(
+
+    # 这是一个高度集成的写法，在大厂工程中非常流行
+    scheduler = OneCycleLR(
         optimizer,
-        start_factor=0.1,
-        total_iters=total_steps
+        max_lr=2e-5,  # 最高学习率
+        total_steps=total_steps,
+        pct_start=0.1,  # 前 10% 的步数用来 Warmup (线性上升)
+        anneal_strategy='cos',  # 剩下的 90% 步数用余弦衰减 (Cosine Annealing)
+        div_factor=10,  # 初始 LR 是 max_lr 的 1/10
+        final_div_factor=1000  # 最终 LR 降到 max_lr 的 1/1000
     )
     
     # 设置中断处理
