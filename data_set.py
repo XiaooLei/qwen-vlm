@@ -130,7 +130,7 @@ class LLaVADataset(Dataset):
             text,
             truncation=True,
             padding='max_length',
-            max_length=256,
+            max_length=768,
             return_tensors='pt'
         )
         
@@ -145,9 +145,9 @@ class LLaVADataset(Dataset):
         
         # 5. 遮挡不需要预测的标记部分
         # 编码需要查找的标记
-        user_start_tokens = self.tokenizer.encode("<|im_start|>user", add_special_tokens=False)
-        assistant_start_tokens = self.tokenizer.encode("<|im_start|>assistant", add_special_tokens=False)
-        im_end_tokens = self.tokenizer.encode("<|im_end|>", add_special_tokens=False)
+        user_start_tokens = self.tokenizer.encode("<|im_start|>user\n", add_special_tokens=False)
+        assistant_start_tokens = self.tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
+        im_end_tokens = self.tokenizer.encode("<|im_end|>\n", add_special_tokens=False)
         
         # 转换为张量以便比较
         user_start_tensor = torch.tensor(user_start_tokens, device=input_ids.device)
@@ -477,36 +477,201 @@ class LLaVADataset(Dataset):
         
         return results
 
-# 使用示例
-if __name__ == "__main__":
+
+
+def check_data_set():
+    """
+    统计输入到模型训练的上下文长度
+    
+    包括：token长度、图像特征后的实际长度、标签遮挡情况等
+    """
+    logger.info("="*60)
+    logger.info("开始统计模型训练上下文长度...")
+    logger.info("="*60)
+    
     # 创建数据集加载器
-    dataset = LLaVADataset(sample_size=1000)
+    dataset = LLaVADataset(sample_size=None)  # 使用全部数据
     
     # 加载数据
     data = dataset.load()
     
-    # 确保数据存在
-    result = dataset.ensure_sample_data_exists()
-    logger.info(f"数据检查结果: {result}")
+    # 1. 基本统计信息
+    logger.info(f"\n【基本统计信息】")
+    logger.info(f"总样本数: {len(data)}")
+    logger.info(f"数据集大小: {len(dataset)}")
+    logger.info(f"最大序列长度: {dataset.tokenizer.model_max_length}")
     
-    # 查看第一个样本
-    if data:
-        sample = dataset.get_sample(0)
-        logger.info("\n第一个样本:")
-        logger.info(f"ID: {sample['id']}")
-        logger.info(f"图片文件名: {sample['image']}")
-        logger.info(f"图片路径: {sample.get('image_path', 'N/A')}")
-        logger.info(f"图片存在: {sample.get('image_exists', False)}")
-        logger.info(f"对话数量: {len(sample['conversations'])}")
-        logger.info(f"第一个问题: {sample['conversations'][0]['value']}")
-        logger.info(f"第一个回答: {sample['conversations'][1]['value']}")
+    # 2. 输入到模型的上下文长度统计
+    logger.info(f"\n【模型训练上下文长度统计】")
     
-    # 测试获取训练数据项
-    if len(dataset) > 0:
-        training_item = dataset[0]
-        logger.info(f"\n训练数据项:")
-        logger.info(f"input_ids shape: {training_item['input_ids'].shape}")
-        logger.info(f"pixel_values shape: {training_item['pixel_values'].shape}")
-        logger.info(f"labels shape: {training_item['labels'].shape}")
+    text_token_lengths = []  # 纯文本token长度（不包括padding）
+    actual_context_lengths = []  # 实际上下文长度（包括图像特征）
+    valid_label_lengths = []  # 有效标签长度
+    masked_label_lengths = []  # 被遮挡的标签长度
     
-    logger.info("\n数据集准备完成！")
+    # 图像特征长度（CLIP ViT-Base: 576个patch tokens）
+    image_feature_length = 196  # 24x24 patches
+    
+    sample_size = min(100, len(data))
+    for i in range(sample_size):
+        item = dataset[i]
+        input_ids = item['input_ids']
+        labels = item['labels']
+        
+        # 统计纯文本token长度（排除padding）
+        text_length = (input_ids != dataset.tokenizer.pad_token_id).sum().item()
+        text_token_lengths.append(text_length)
+        
+        # 计算实际上下文长度（文本token + 图像特征 - <image>占位符）
+        # 查找<image> token的位置
+        image_token_id = dataset.tokenizer.convert_tokens_to_ids("<image>")
+        image_token_count = (input_ids == image_token_id).sum().item()
+        
+        # 实际上下文长度 = 文本长度 + 图像特征长度 - <image>占位符数量
+        actual_context_length = text_length + (image_feature_length * image_token_count) - image_token_count
+        actual_context_lengths.append(actual_context_length)
+        
+        # 统计有效标签和被遮挡的标签
+        valid_count = (labels != -100).sum().item()
+        masked_count = (labels == -100).sum().item()
+        valid_label_lengths.append(valid_count)
+        masked_label_lengths.append(masked_count)
+    
+    logger.info(f"纯文本token长度 - 平均: {sum(text_token_lengths) / len(text_token_lengths):.2f}, 最小: {min(text_token_lengths)}, 最大: {max(text_token_lengths)}")
+    logger.info(f"实际上下文长度（含图像特征） - 平均: {sum(actual_context_lengths) / len(actual_context_lengths):.2f}, 最小: {min(actual_context_lengths)}, 最大: {max(actual_context_lengths)}")
+    logger.info(f"有效标签长度 - 平均: {sum(valid_label_lengths) / len(valid_label_lengths):.2f}, 最小: {min(valid_label_lengths)}, 最大: {max(valid_label_lengths)}")
+    logger.info(f"被遮挡标签长度 - 平均: {sum(masked_label_lengths) / len(masked_label_lengths):.2f}, 最小: {min(masked_label_lengths)}, 最大: {max(masked_label_lengths)}")
+    
+    # 计算遮挡比例
+    total_labels = sum(valid_label_lengths) + sum(masked_label_lengths)
+    if total_labels > 0:
+        mask_ratio = sum(masked_label_lengths) / total_labels * 100
+        logger.info(f"标签遮挡比例 - 平均: {mask_ratio:.2f}%")
+    
+    # 3. 长度分布统计
+    logger.info(f"\n【长度分布统计】")
+    from collections import Counter
+    
+    # 纯文本长度分布（按区间统计）
+    text_length_bins = {
+        '0-50': sum(1 for l in text_token_lengths if l <= 50),
+        '51-100': sum(1 for l in text_token_lengths if 50 < l <= 100),
+        '101-150': sum(1 for l in text_token_lengths if 100 < l <= 150),
+        '151-200': sum(1 for l in text_token_lengths if 150 < l <= 200),
+        '201-256': sum(1 for l in text_token_lengths if 200 < l <= 256),
+        '256+': sum(1 for l in text_token_lengths if l > 256)
+    }
+    logger.info(f"纯文本长度分布: {text_length_bins}")
+    
+    # 实际上下文长度分布（按区间统计）
+    context_length_bins = {
+        '0-256': sum(1 for l in actual_context_lengths if l <= 256),
+        '257-512': sum(1 for l in actual_context_lengths if 256 < l <= 512),
+        '513-768': sum(1 for l in actual_context_lengths if 512 < l <= 768),
+        '769+': sum(1 for l in actual_context_lengths if l > 768)
+    }
+    logger.info(f"实际上下文长度分布: {context_length_bins}")
+    
+    # 4. 样本示例
+    logger.info(f"\n【样本示例】")
+    if len(data) > 0:
+        sample = dataset[0]
+        input_ids = sample['input_ids']
+        labels = sample['labels']
+        
+        # 计算第一个样本的详细信息
+        text_length = (input_ids != dataset.tokenizer.pad_token_id).sum().item()
+        image_token_id = dataset.tokenizer.convert_tokens_to_ids("<image>")
+        image_token_count = (input_ids == image_token_id).sum().item()
+        actual_context_length = text_length + (image_feature_length * image_token_count) - image_token_count
+        valid_count = (labels != -100).sum().item()
+        masked_count = (labels == -100).sum().item()
+        
+        logger.info(f"第一个样本:")
+        logger.info(f"  纯文本token长度: {text_length}")
+        logger.info(f"  <image> token数量: {image_token_count}")
+        logger.info(f"  图像特征长度: {image_feature_length * image_token_count}")
+        logger.info(f"  实际上下文长度（含图像特征）: {actual_context_length}")
+        logger.info(f"  有效标签长度: {valid_count}")
+        logger.info(f"  被遮挡标签长度: {masked_count}")
+        logger.info(f"  遮挡比例: {masked_count / (valid_count + masked_count) * 100:.2f}%")
+        
+        # 解码并打印完整的labels（显示遮挡情况）
+        decoded_labels = []
+        for label_id in labels:
+            if label_id == -100:
+                decoded_labels.append("[MASKED]")
+            else:
+                try:
+                    token = dataset.tokenizer.decode([label_id], skip_special_tokens=False)
+                    decoded_labels.append(token)
+                except:
+                    decoded_labels.append(f"[ID:{label_id}]")
+        
+        logger.info(f"\n第一个样本的labels（前60个token）:")
+        logger.info(" ".join(decoded_labels[:60]))
+    
+    logger.info("\n" + "="*60)
+    logger.info("模型训练上下文长度统计完成！")
+    logger.info("="*60)
+
+
+
+# 使用示例
+if __name__ == "__main__":
+    # # 创建数据集加载器
+    check_data_set()
+    # dataset = LLaVADataset(sample_size=1000)
+    
+    # # 加载数据
+    # data = dataset.load()
+    
+    # # 确保数据存在
+    # result = dataset.ensure_sample_data_exists()
+    # logger.info(f"数据检查结果: {result}")
+    
+    # # 查看第一个样本
+    # if data:
+    #     sample = dataset.get_sample(0)
+    #     logger.info("\n第一个样本:")
+    #     logger.info(f"ID: {sample['id']}")
+    #     logger.info(f"图片文件名: {sample['image']}")
+    #     logger.info(f"图片路径: {sample.get('image_path', 'N/A')}")
+    #     logger.info(f"图片存在: {sample.get('image_exists', False)}")
+    #     logger.info(f"对话数量: {len(sample['conversations'])}")
+    #     logger.info(f"第一个问题: {sample['conversations'][0]['value']}")
+    #     logger.info(f"第一个回答: {sample['conversations'][1]['value']}")
+    
+    # # 测试获取训练数据项
+    # if len(dataset) > 0:
+    #     training_item = dataset[0]
+    #     logger.info(f"\n训练数据项:")
+    #     logger.info(f"input_ids shape: {training_item['input_ids'].shape}")
+    #     logger.info(f"pixel_values shape: {training_item['pixel_values'].shape}")
+    #     logger.info(f"labels shape: {training_item['labels'].shape}")
+        
+    #     # 解码并打印完整的labels（包括被遮挡的部分）
+    #     labels = training_item['labels']
+        
+    #     # 创建一个可解码的标签副本，将-100替换为一个特殊标记
+    #     decoded_labels = []
+    #     for label_id in labels:
+    #         if label_id == -100:
+    #             decoded_labels.append("[MASKED]")
+    #         else:
+    #             try:
+    #                 token = dataset.tokenizer.decode([label_id], skip_special_tokens=False)
+    #                 decoded_labels.append(token)
+    #             except:
+    #                 decoded_labels.append(f"[ID:{label_id}]")
+        
+    #     # 打印标签内容，显示遮挡情况
+    #     logger.info("完整labels（包括遮挡部分）:")
+    #     logger.info(" ".join(decoded_labels[:512]))  # 只打印前50个token，避免输出过长
+        
+    #     # 同时打印原始input_ids的解码结果用于对比
+    #     input_ids = training_item['input_ids']
+    #     decoded_inputs = dataset.tokenizer.decode(input_ids, skip_special_tokens=False)
+    #     logger.info(f"\n原始输入文本:")
+    #     logger.info(decoded_inputs[:512] + "..." if len(decoded_inputs) > 300 else decoded_inputs)
+    # logger.info("\n数据集准备完成！")
