@@ -265,7 +265,9 @@ def main():
     projector_path = "projector_init.pt"
     if os.path.exists(projector_path):
         logger.info(f"从 {projector_path} 加载 projector 参数")
-        projector_params = torch.load(projector_path)
+        # 加载参数并转换到当前设备
+        projector_params = torch.load(projector_path, map_location='cpu')
+        logger.info(f"已加载 projector 参数，准备转换到当前设备")
     else:
         projector_params = None
 
