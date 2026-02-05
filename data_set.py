@@ -180,8 +180,8 @@ class LLaVADataset(Dataset):
                         end_idx = idx + len(assistant_start_tensor)
                         while (len(input_ids) - end_idx) >= len(im_end_tensor):
                             if torch.equal(input_ids[end_idx:end_idx+len(im_end_tensor)], im_end_tensor):
-                                # 遮挡结束标记，保留中间内容
-                                labels[end_idx:end_idx+len(im_end_tensor)] = -100
+                                # 不用遮挡结束标记，保留中间内容
+                                # labels[end_idx:end_idx+len(im_end_tensor)] = -100
                                 idx = end_idx + len(im_end_tensor)
                                 break
                             end_idx += 1
@@ -490,7 +490,7 @@ def check_data_set():
     logger.info("="*60)
     
     # 创建数据集加载器
-    dataset = LLaVADataset(sample_size=None)  # 使用全部数据
+    dataset = LLaVADataset(sample_size=10000)  # 使用全部数据
     
     # 加载数据
     data = dataset.load()
