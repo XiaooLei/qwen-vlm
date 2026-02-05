@@ -337,12 +337,12 @@ def main():
     # 这是一个高度集成的写法，在大厂工程中非常流行
     scheduler = OneCycleLR(
         optimizer,
-        max_lr=1e-5,  # 最高学习率
+        max_lr=2e-5,  # 0.5B模型建议维持在2e-5，但通过衰减来控制
         total_steps=total_steps,
-        pct_start=0.1,  # 前 10% 的步数用来 Warmup (线性上升)
-        anneal_strategy='cos',  # 剩下的 90% 步数用余弦衰减 (Cosine Annealing)
-        div_factor=10,  # 初始 LR 是 max_lr 的 1/10
-        final_div_factor=1000  # 最终 LR 降到 max_lr 的 1/1000
+        pct_start=0.05,  # 【关键修改】从 0.1 降到 0.05。10000步里只需前500步预热
+        anneal_strategy='cos',
+        div_factor=20,  # 【关键修改】初始 LR 设为 max_lr 的 1/20，起步更稳
+        final_div_factor=100  # 【关键修改】最终降到 max_lr 的 1/100，确保末期足够收敛
     )
     
     # 设置中断处理
