@@ -331,7 +331,7 @@ def main():
     )
     
     # 学习率调度器
-    total_steps = len(config["sample_size"]) * config['num_epochs']
+    total_steps = int(config["sample_size"]) * config['num_epochs']
     warmup_steps = int(total_steps * config['warmup_ratio'])
 
     # 这是一个高度集成的写法，在大厂工程中非常流行
