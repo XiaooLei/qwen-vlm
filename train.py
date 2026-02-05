@@ -331,13 +331,13 @@ def main():
     )
     
     # 学习率调度器
-    total_steps = len(train_dataloader) * config['num_epochs']
+    total_steps = len(config["sample_size"]) * config['num_epochs']
     warmup_steps = int(total_steps * config['warmup_ratio'])
 
     # 这是一个高度集成的写法，在大厂工程中非常流行
     scheduler = OneCycleLR(
         optimizer,
-        max_lr=2e-5,  # 最高学习率
+        max_lr=1e-5,  # 最高学习率
         total_steps=total_steps,
         pct_start=0.1,  # 前 10% 的步数用来 Warmup (线性上升)
         anneal_strategy='cos',  # 剩下的 90% 步数用余弦衰减 (Cosine Annealing)
