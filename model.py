@@ -231,7 +231,7 @@ class VLMModel(torch.nn.Module):
             max_new_tokens=max_new_tokens,
             do_sample=False,            # Greedy search 比较稳
             repetition_penalty=1.2,     # 稍微加大惩罚，防止口吃
-            #eos_token_id=self.tokenizer.convert_tokens_to_ids("<|im_end|>"), # 明确结束符
+            eos_token_id=self.tokenizer.convert_tokens_to_ids("<|im_end|>"), # 明确结束符
             pad_token_id=self.tokenizer.pad_token_id
         )
         
