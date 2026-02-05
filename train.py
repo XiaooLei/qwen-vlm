@@ -263,7 +263,7 @@ def main():
     logger.info("Loading model...")
 
     projector_path = os.path.join(config['checkpoint_dir'], f"projector_best_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
-    projector_path = "projector_init.pt"
+    #projector_path = "projector_init.pt"
     if os.path.exists(projector_path):
         logger.info(f"从 {projector_path} 加载 projector 参数")
         # 加载参数并转换到当前设备
