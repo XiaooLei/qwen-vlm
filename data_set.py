@@ -123,6 +123,7 @@ class LLaVADataset(Dataset):
         """
         # 1. 获取对话并构建完整文本
         conversations = sample['conversations']
+        conversations = conversations[:1]
         text = self._build_conversation_text(conversations)
         
         # 2. 编码文本为token IDs
@@ -130,7 +131,7 @@ class LLaVADataset(Dataset):
             text,
             truncation=True,
             padding='max_length',
-            max_length=768,
+            max_length=256,
             return_tensors='pt'
         )
         
@@ -180,7 +181,7 @@ class LLaVADataset(Dataset):
                         end_idx = idx + len(assistant_start_tensor)
                         while (len(input_ids) - end_idx) >= len(im_end_tensor):
                             if torch.equal(input_ids[end_idx:end_idx+len(im_end_tensor)], im_end_tensor):
-                                # 不用遮挡结束标记，保留中间内容
+                                # 遮挡结束标记，保留中间内容
                                 # labels[end_idx:end_idx+len(im_end_tensor)] = -100
                                 idx = end_idx + len(im_end_tensor)
                                 break
