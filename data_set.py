@@ -123,7 +123,7 @@ class LLaVADataset(Dataset):
         """
         # 1. 获取对话并构建完整文本
         conversations = sample['conversations']
-        conversations = conversations[:1]
+        conversations = conversations[:2]
         text = self._build_conversation_text(conversations)
         
         # 2. 编码文本为token IDs

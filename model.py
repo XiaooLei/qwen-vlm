@@ -76,9 +76,9 @@ class VLMModel(torch.nn.Module):
     def forward(self, input_ids, pixel_values, labels=None):
         visual_outputs = self.vision_encoder(pixel_values)
         # [B, 576, 768] -> [B, 576, LLM_DIM]
-        image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :]) 
+        image_features = self.projector(visual_outputs.last_hidden_state[:, 1:, :])
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        
+
         batch_size = input_ids.size(0)
         new_embeds = []
         new_labels = []
@@ -98,7 +98,7 @@ class VLMModel(torch.nn.Module):
                 print(f"Image token indices: {indices}")
                 # 再打印当前的input_ids中image token的位置
                 print(f"Warning: No <image> token found in input_ids ❌[{i}]")
-            
+
             if len(indices) == 0:
                 # 如果没图，退化为普通文本处理
                 new_embeds.append(inputs_embeds[i])
@@ -107,7 +107,7 @@ class VLMModel(torch.nn.Module):
             else:
                 # 假设每条数据只有一个 <image> 占位符
                 idx = indices[0]
-                
+
                 # 拼接：前文本 + 图像特征 + 后文本
                 # 注意：这里完全跳过了原有的 <image> token embedding
                 cur_embeds = torch.cat([
@@ -116,10 +116,10 @@ class VLMModel(torch.nn.Module):
                     inputs_embeds[i, idx + 1:, :]
                 ], dim=0)
                 new_embeds.append(cur_embeds)
-                
+
                 if labels is not None:
                     # 标签同步偏移：前标签 + 图像占位(-100) + 后标签
-                    img_labels = torch.full((image_features.size(1),), -100, 
+                    img_labels = torch.full((image_features.size(1),), -100,
                                           dtype=labels.dtype, device=labels.device)
                     cur_labels = torch.cat([
                         labels[i, :idx],
@@ -130,7 +130,7 @@ class VLMModel(torch.nn.Module):
 
         # 动态 Padding
         max_len = max(e.size(0) for e in new_embeds)
-        final_embeds = torch.zeros(batch_size, max_len, self.llm_hidden_dim, 
+        final_embeds = torch.zeros(batch_size, max_len, self.llm_hidden_dim,
                                  dtype=target_dtype, device=self.device)
         # 使用 tokenizer 的 pad_token_id 填充
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
@@ -141,57 +141,58 @@ class VLMModel(torch.nn.Module):
             final_embeds[i, :cur_len, :] = new_embeds[i]
             if labels is not None:
                 final_labels[i, :cur_len] = new_labels[i]
-        
+
         # --- 临时调试代码修正版 ---
-        if labels is not None:
+        if labels is not None and torch.rand(1).item() < 0.05:
             # 1. 正常的 Forward 已经拿到了 logits
             # 这里的 logits 维度是 [B, N, Vocabulary_Size]
-            logits = self.language_model(inputs_embeds=final_embeds).logits
-            
+            output = self.language_model(inputs_embeds=final_embeds, labels=final_labels if labels is not None else None,return_dict=True)
+            logits = output.logits
+
             # 2. 执行 Shift 操作，对齐预测与标签
             # 预测序列：   [P0, P1, P2, P3] (logits 里的 0 到 n-1)
             # 对应目标：   [L1, L2, L3, L4] (labels 里的 1 到 n)
             shift_logits = logits[:, :-1, :].contiguous()
             shift_labels = final_labels[:, 1:].contiguous()
-            
+
             # 3. 构造 Mask，只解码我们需要关注的（Assistant 回答且非 Padding 部分）
             valid_mask = (shift_labels != -100)
-            
+
             # 4. 随机采样打印，避免刷屏
-            if torch.rand(1).item() < 0.05: # 5% 的概率打印
-                print(f"\n" + "="*50)
-                # 找到当前 batch 中第一个有有效标签的样本
-                for i in range(batch_size):
-                    m = valid_mask[i]
-                    if m.any():
-                        # 提取预测和真实标签
-                        p_tokens = torch.argmax(shift_logits[i][m], dim=-1)
-                        t_tokens = shift_labels[i][m]
-                        
-                        # 解码成文本
-                        pred_str = self.tokenizer.decode(p_tokens, skip_special_tokens=False)
-                        target_str = self.tokenizer.decode(t_tokens, skip_special_tokens=False)
-                        
-                        print(f"【Step 调试采样】")
-                        print(f"预测文本 >> {pred_str}")
-                        print(f"实际文本 >> {target_str}")
-                        
-                        # 额外检查：对比前 5 个 token 的 ID 是否一致（直观判断对齐）
-                        # print(f"前5个Token ID对比: \nPred: {p_tokens[:5].tolist()}\nTarget: {t_tokens[:5].tolist()}")
-                        break 
-                print("="*50 + "\n")
+            print(f"\n" + "="*50)
+            # 找到当前 batch 中第一个有有效标签的样本
+            for i in range(batch_size):
+                m = valid_mask[i]
+                if m.any():
+                    # 提取预测和真实标签
+                    p_tokens = torch.argmax(shift_logits[i][m], dim=-1)
+                    t_tokens = shift_labels[i][m]
+
+                    # 解码成文本
+                    pred_str = self.tokenizer.decode(p_tokens, skip_special_tokens=False)
+                    target_str = self.tokenizer.decode(t_tokens, skip_special_tokens=False)
+
+                    print(f"【Step 调试采样】")
+                    print(f"预测文本 >> {pred_str}")
+                    print(f"实际文本 >> {target_str}")
+
+                    # 额外检查：对比前 5 个 token 的 ID 是否一致（直观判断对齐）
+                    # print(f"前5个Token ID对比: \nPred: {p_tokens[:5].tolist()}\nTarget: {t_tokens[:5].tolist()}")
+                    break
+            print("="*50 + "\n")
+            return output
             # print("------------------")
             # print("image token id:", self.image_token_id)
             # print(f"预测 ID 前 10 个: {pred_tokens[:10].tolist()}")
             # print(f"实际 ID 前 10 个: {target_tokens[:10].tolist()}")
             # exit(-1)
-            
+
             # 3. 检查图像特征的强度
             # print(f"Image Features Mean Abs: {image_features.abs().mean().item()}")
             # ------------------
-        
+
         return self.language_model(
-            inputs_embeds=final_embeds, 
+            inputs_embeds=final_embeds,
             labels=final_labels if labels is not None else None,
             return_dict=True
         )
@@ -224,13 +225,14 @@ class VLMModel(torch.nn.Module):
             inputs_embeds[:, idx + 1:, :]
         ], dim=1)
 
-        # 5. 生成
+        bad_ids = self.tokenizer.encode("] /", add_special_tokens=False)        # 5. 生成
         # 注意：这里我们只传 inputs_embeds，不传 input_ids
         output_ids = self.language_model.generate(
             inputs_embeds=combined_embeds,
             max_new_tokens=max_new_tokens,
             do_sample=False,            # Greedy search 比较稳
             repetition_penalty=1.2,     # 稍微加大惩罚，防止口吃
+            begin_suppress_tokens=bad_ids,  # 强行禁止开场白出现这些脏数据
             eos_token_id=self.tokenizer.convert_tokens_to_ids("<|im_end|>"), # 明确结束符
             pad_token_id=self.tokenizer.pad_token_id
         )
