@@ -43,6 +43,7 @@ class LLaVADataset(Dataset):
         self.images_dir = os.path.join(data_dir, "train2017")
         self.data = []
         self.chat_round = chat_round
+        self.max_seq_len = max_seq_len
         
         # 初始化tokenizer和image processor
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
