@@ -295,6 +295,11 @@ def main():
 
     model = VLMModel(llm_name=config['llm_name'], vision_name=config['vision_name'], projector_params=projector_params, train_mode=config['train_mode'])
     model = model.to(device)
+    if torch.cuda.device_count() > 1:
+        print(f"检测到 {torch.cuda.device_count()} 张显卡，启动并行模式！")
+        model = torch.nn.DataParallel(model)
+    else:
+        print(f"仅检测到 1 张显卡，不启用并行模式")
 
     if config['train_mode'] == "lora":
         lora_params = None
