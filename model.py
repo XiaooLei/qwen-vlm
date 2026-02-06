@@ -2,12 +2,16 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers import CLIPVisionModel, CLIPImageProcessor
 import torch
 from PIL import Image
+from peft import LoraConfig, get_peft_model
+import os
+
+
 
 # 建议使用 bf16 或 fp32，Qwen2.5 在 fp16 下有时不稳定
 target_dtype = torch.float32 
 
 class VLMModel(torch.nn.Module):
-    def __init__(self, llm_name="Qwen/Qwen2.5-0.5B-Instruct", vision_name="openai/clip-vit-base-patch16", projector_params=None):
+    def __init__(self, llm_name="Qwen/Qwen2.5-0.5B-Instruct", vision_name="openai/clip-vit-base-patch16", projector_params=None, lora_params=None, train_mode="both"):
         super().__init__()
         if torch.cuda.is_available():
             device = "cuda"
@@ -15,6 +19,8 @@ class VLMModel(torch.nn.Module):
             device = "mps"
         else:
             device = "cpu"
+        
+        self.train_mode = train_mode
         # todo 临时用cpu
         # device = "cpu"
         self.device = torch.device(device)
@@ -63,16 +69,38 @@ class VLMModel(torch.nn.Module):
         if projector_params is not None:
             self.projector.load_state_dict(projector_params)
         
-        # 冻结
+        # 冻结 LLM 和 Vision Encoder
         for param in self.language_model.parameters():
             param.requires_grad = False
         for param in self.vision_encoder.parameters():
             param.requires_grad = False
         
-        # 确保 Projector 可训练
+        # Projector 在两种模式下都训练
         for param in self.projector.parameters():
             param.requires_grad = True
+    
+    def get_lora_params(self):
+        return {k: v for k, v in self.language_model.state_dict().items() if "lora_" in k}
 
+    def load_lora(self, lora_params, device=None):
+        print(f"正在注入并加载 LoRA 权重...")
+        lora_config = LoraConfig(
+            r=64,
+            lora_alpha=128,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+        # 在原始 language_model 上包装 LoRA 层
+        self.language_model = get_peft_model(self.language_model, lora_config)
+        if lora_params is not None:
+            # 将 LoRA 参数移动到目标设备
+            if device is not None:
+                lora_params = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in lora_params.items()}
+            self.language_model.load_state_dict(lora_params, strict=False)
+
+    
     def forward(self, input_ids, pixel_values, labels=None):
         visual_outputs = self.vision_encoder(pixel_values)
         # [B, 576, 768] -> [B, 576, LLM_DIM]

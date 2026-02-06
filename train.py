@@ -199,11 +199,20 @@ def train_model(
                 logger.info(f"New best model saved with validation loss: {val_loss:.4f}")
         
         torch.save(model.projector.state_dict(), os.path.join(checkpoint_dir, f"projector_epoch{epoch}_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt"))    
-        # 每个 epoch 保存检查点    
+        if config['train_mode'] == "lora":
+            # 保存lora参数
+            lora_path = os.path.join(checkpoint_dir, f"lora_best_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
+            torch.save(model.get_lora_params(), lora_path)
+            logger.info(f"New best lora model saved with validation loss: {val_loss:.4f}")   
     # 保存最终模型
     final_model_path = os.path.join(checkpoint_dir, f"projector_final_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
     torch.save(model.projector.state_dict(), final_model_path)
-    logger.info(f"Final model saved to {final_model_path}")
+    logger.info(f"Final projector model saved to {final_model_path}")
+    if config['train_mode'] == "lora":
+        # 保存lora参数
+        lora_path = os.path.join(checkpoint_dir, f"lora_final_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
+        torch.save(model.get_lora_params(), lora_path)
+        logger.info(f"Final lora model saved to {lora_path}")
     
     # 训练总结
     logger.info("\n" + "=" * 60)
@@ -230,6 +239,12 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for optimizer")
     parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Warmup ratio for learning rate scheduler")
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
+    parser.add_argument("--train_mode", type=str, default="pretrain", choices=["pretrain", "lora"], help="Training mode: projector only, lora only, or both")
+    parser.add_argument("--lora_path", type=str, default=None, help="Path to the lora checkpoint")
+    parser.add_argument("--chat_round", type=int, default=5, help="Number of chat rounds")
+    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
+    parser.add_argument("--projector_init_file", type=str, default=None, help="Path to the projector init file")
+
     args = parser.parse_args()
 
     config = {
@@ -243,7 +258,11 @@ def main():
         'vision_name': args.vision_name,
         'grad_accum_steps': 4,
         'checkpoint_dir': args.checkpoint_dir,
-        'sample_size': args.sample_size
+        'sample_size': args.sample_size,
+        'train_mode': args.train_mode,
+        'chat_round': args.chat_round,
+        'max_seq_len': args.max_seq_len,
+        'projector_init_file': args.projector_init_file
     }
     
     # 设备配置
@@ -263,6 +282,8 @@ def main():
     logger.info("Loading model...")
 
     projector_path = os.path.join(config['checkpoint_dir'], f"projector_best_{extract_model_name(config['llm_name'])}_{extract_model_name(config['vision_name'])}.pt")
+    if config['projector_init_file'] is not None:
+        projector_path = os.path.join(config['checkpoint_dir'], config['projector_init_file'])
     #projector_path = "projector_init.pt"
     if os.path.exists(projector_path):
         logger.info(f"从 {projector_path} 加载 projector 参数")
@@ -272,11 +293,17 @@ def main():
     else:
         projector_params = None
 
-    model = VLMModel(llm_name=config['llm_name'], vision_name=config['vision_name'], projector_params=projector_params)
+    model = VLMModel(llm_name=config['llm_name'], vision_name=config['vision_name'], projector_params=projector_params, train_mode=config['train_mode'])
     model = model.to(device)
 
-    model.tokenizer.add_tokens(["<|image|>"], special_tokens=True)
-    model.language_model.resize_token_embeddings(len(model.tokenizer))
+    if config['train_mode'] == "lora":
+        lora_params = None
+        if args.lora_path is not None:
+            lora_path = args.lora_path if os.path.isabs(args.lora_path) else os.path.join(config['checkpoint_dir'], args.lora_path)
+            if os.path.exists(lora_path):
+                logger.info(f"从 {lora_path} 加载 LoRA 参数")
+                lora_params = torch.load(lora_path, map_location='cpu')
+        model.load_lora(lora_params, device)
 
     # 计算参数数量
     total_params = sum(p.numel() for p in model.parameters())
@@ -289,7 +316,9 @@ def main():
     train_dataset = LLaVADataset(
         data_dir=config['data_dir'],
         is_train=True,
-        sample_size=config['sample_size']
+        sample_size=config['sample_size'],
+        chat_round=config['chat_round'],
+        max_seq_len=config['max_seq_len']
     )
     train_dataset.load()
     train_dataset.ensure_sample_data_exists()
@@ -297,7 +326,9 @@ def main():
     val_dataset = LLaVADataset(
         data_dir=config['data_dir'],
         is_train=False,
-        sample_size=100
+        sample_size=100,
+        chat_round=config['chat_round'],
+        max_seq_len=config['max_seq_len']
     )
     val_dataset.load()
     
@@ -374,3 +405,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#!python3 train.py --sample_size 10000 --batch_size 2 --llm_name Qwen/Qwen2.5-0.5B-Instruct --num_epochs 3 --projector_init_file projector_init.pt --chat_round 2 --max_seq_len 768 --train_mode lora
