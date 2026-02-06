@@ -23,7 +23,9 @@ class LLaVADataset(Dataset):
     def __init__(self, data_dir: str = "./llava_data", is_train: bool = True, 
                  llm_name: str = "Qwen/Qwen2.5-0.5B", 
                  vision_name: str = "openai/clip-vit-base-patch16", 
-                 sample_size: Optional[int] = None):
+                 sample_size: Optional[int] = None,
+                 chat_round: int = 5,
+                 max_seq_len: int = 512):
         """
         初始化数据集加载器
         
@@ -40,6 +42,7 @@ class LLaVADataset(Dataset):
         self.annotations_file = os.path.join(data_dir, "llava_instruct_150k.json")
         self.images_dir = os.path.join(data_dir, "train2017")
         self.data = []
+        self.chat_round = chat_round
         
         # 初始化tokenizer和image processor
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
@@ -49,6 +52,8 @@ class LLaVADataset(Dataset):
 
         self.image_processor = CLIPImageProcessor.from_pretrained(vision_name)
         
+
+
         # 如果tokenizer没有pad_token，则设置为eos_token
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -123,7 +128,7 @@ class LLaVADataset(Dataset):
         """
         # 1. 获取对话并构建完整文本
         conversations = sample['conversations']
-        conversations = conversations[:2]
+        conversations = conversations[:self.chat_round*2]
         text = self._build_conversation_text(conversations)
         
         # 2. 编码文本为token IDs
@@ -131,7 +136,7 @@ class LLaVADataset(Dataset):
             text,
             truncation=True,
             padding='max_length',
-            max_length=256,
+            max_length=self.max_seq_len,
             return_tensors='pt'
         )
         
