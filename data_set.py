@@ -5,10 +5,12 @@ import logging
 from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from PIL import Image
 from transformers import AutoTokenizer, CLIPImageProcessor
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import random
 
 # 配置日志
 logging.basicConfig(
@@ -623,11 +625,286 @@ def check_data_set():
     logger.info("="*60)
 
 
+def analyze_yes_no_bias(data_dir="./llava_data", sample_size=None, chat_round=2):
+    """
+    分析训练数据中一般疑问句的回答分布情况
+    
+    Args:
+        data_dir: 数据目录
+        sample_size: 分析样本数量，None表示全部
+        chat_round: 对话轮数
+    """
+    import re
+    
+    logger.info("="*60)
+    logger.info("开始分析一般疑问句回答分布...")
+    logger.info("="*60)
+    
+    dataset = LLaVADataset(data_dir=data_dir, sample_size=sample_size, chat_round=chat_round)
+    data = dataset.load()[:sample_size]
+    
+    total_samples = len(data)
+    yes_no_questions = []
+    
+    yes_no_patterns = [
+        r'\b(is|are|was|were|do|does|did|can|could|will|would|should|may|might|must|has|have|had)\b.*\?',
+        r'\b(Is|Are|Was|Were|Do|Does|Did|Can|Could|Will|Would|Should|May|Might|Must|Has|Have|Had)\b.*\?',
+        r'\b(yes|no)\b',
+    ]
+    
+    yes_keywords = [r'\byes\b', r'\bYes\b', r'\bYES\b', r'\byeah\b', r'\bYeah\b', r'\byup\b', r'\bYup\b', r'\bcorrect\b', r'\bCorrect\b', r'\bright\b', r'\bRight\b', r'\btrue\b', r'\bTrue\b']
+    no_keywords = [r'\bno\b', r'\bNo\b', r'\bNO\b', r'\bnah\b', r'\bNah\b', r'\bnope\b', r'\bNope\b', r'\bincorrect\b', r'\bIncorrect\b', r'\bwrong\b', r'\bWrong\b', r'\bfalse\b', r'\bFalse\b']
+    
+    for idx, sample in enumerate(data):
+        conversations = sample.get('conversations', [])
+        
+        for i in range(0, len(conversations) - 1, 2):
+            if i + 1 >= len(conversations):
+                break
+                
+            user_msg = conversations[i].get('value', '')
+            assistant_msg = conversations[i + 1].get('value', '')
+            
+            if conversations[i].get('from') != 'human':
+                continue
+            
+            is_question = any(re.search(pattern, user_msg) for pattern in yes_no_patterns)
+            
+            if is_question:
+                answer_lower = assistant_msg.lower().strip()
+                
+                if any(re.search(kw, answer_lower) for kw in yes_keywords):
+                    answer_type = 'yes'
+                elif any(re.search(kw, answer_lower) for kw in no_keywords):
+                    answer_type = 'no'
+                elif answer_lower.startswith(('yes', 'no', 'yeah', 'nah', 'yup', 'nope', 'correct', 'incorrect', 'right', 'wrong', 'true', 'false')):
+                    answer_type = 'yes' if answer_lower.startswith(('yes', 'yeah', 'yup', 'correct', 'right', 'true')) else 'no'
+                else:
+                    answer_type = 'other'
+                
+                yes_no_questions.append({
+                    'sample_idx': idx,
+                    'question': user_msg,
+                    'answer': assistant_msg,
+                    'answer_type': answer_type,
+                    'question_length': len(user_msg),
+                    'answer_length': len(assistant_msg)
+                })
+    
+    total_yes_no = len(yes_no_questions)
+    yes_count = sum(1 for q in yes_no_questions if q['answer_type'] == 'yes')
+    no_count = sum(1 for q in yes_no_questions if q['answer_type'] == 'no')
+    other_count = sum(1 for q in yes_no_questions if q['answer_type'] == 'other')
+    
+    logger.info(f"\n【总体统计】")
+    logger.info(f"总样本数: {total_samples}")
+    logger.info(f"一般疑问句数量: {total_yes_no}")
+    logger.info(f"一般疑问句占比: {total_yes_no/total_samples*100:.2f}%")
+    
+    logger.info(f"\n【回答类型分布】")
+    logger.info(f"Yes 回答: {yes_count} ({yes_count/total_yes_no*100:.2f}%)")
+    logger.info(f"No 回答: {no_count} ({no_count/total_yes_no*100:.2f}%)")
+    logger.info(f"其他回答: {other_count} ({other_count/total_yes_no*100:.2f}%)")
+    
+    if total_yes_no > 0:
+        logger.info(f"\n【Yes/No 比例】")
+        logger.info(f"Yes:No = {yes_count}:{no_count} (比例 = {yes_count/no_count if no_count > 0 else float('inf'):.2f}:1)")
+        
+        if yes_count / total_yes_no > 0.7:
+            logger.warning("⚠️  警告: Yes 回答比例过高 (>70%)，可能导致模型偏向回答 Yes!")
+        elif yes_count / total_yes_no > 0.6:
+            logger.warning("⚠️  注意: Yes 回答比例偏高 (>60%)")
+    
+    logger.info(f"\n【问题长度统计】")
+    question_lengths = [q['question_length'] for q in yes_no_questions]
+    logger.info(f"平均问题长度: {sum(question_lengths)/len(question_lengths):.1f} 字符")
+    logger.info(f"最短问题: {min(question_lengths)} 字符")
+    logger.info(f"最长问题: {max(question_lengths)} 字符")
+    
+    logger.info(f"\n【回答长度统计】")
+    answer_lengths = [q['answer_length'] for q in yes_no_questions]
+    logger.info(f"平均回答长度: {sum(answer_lengths)/len(answer_lengths):.1f} 字符")
+    logger.info(f"最短回答: {min(answer_lengths)} 字符")
+    logger.info(f"最长回答: {max(answer_lengths)} 字符")
+    
+    logger.info(f"\n【Yes 回答示例 (前5个)】")
+    yes_examples = [q for q in yes_no_questions if q['answer_type'] == 'yes'][:5]
+    for i, ex in enumerate(yes_examples, 1):
+        logger.info(f"\n示例 {i}:")
+        logger.info(f"  问题: {ex['question'][:100]}..." if len(ex['question']) > 100 else f"  问题: {ex['question']}")
+        logger.info(f"  回答: {ex['answer'][:100]}..." if len(ex['answer']) > 100 else f"  回答: {ex['answer']}")
+    
+    logger.info(f"\n【No 回答示例 (前5个)】")
+    no_examples = [q for q in yes_no_questions if q['answer_type'] == 'no'][:5]
+    for i, ex in enumerate(no_examples, 1):
+        logger.info(f"\n示例 {i}:")
+        logger.info(f"  问题: {ex['question'][:100]}..." if len(ex['question']) > 100 else f"  问题: {ex['question']}")
+        logger.info(f"  回答: {ex['answer'][:100]}..." if len(ex['answer']) > 100 else f"  回答: {ex['answer']}")
+    
+    logger.info(f"\n【其他回答示例 (前5个)】")
+    other_examples = [q for q in yes_no_questions if q['answer_type'] == 'other'][:5]
+    for i, ex in enumerate(other_examples, 1):
+        logger.info(f"\n示例 {i}:")
+        logger.info(f"  问题: {ex['question'][:100]}..." if len(ex['question']) > 100 else f"  问题: {ex['question']}")
+        logger.info(f"  回答: {ex['answer'][:100]}..." if len(ex['answer']) > 100 else f"  回答: {ex['answer']}")
+    
+    logger.info("\n" + "="*60)
+    logger.info("分析完成！")
+    logger.info("="*60)
+    
+    return {
+        'total_samples': total_samples,
+        'total_yes_no': total_yes_no,
+        'yes_count': yes_count,
+        'no_count': no_count,
+        'other_count': other_count,
+        'yes_ratio': yes_count / total_yes_no if total_yes_no > 0 else 0,
+        'no_ratio': no_count / total_yes_no if total_yes_no > 0 else 0
+    }
+
+
+class BalancedSampler(Sampler):
+    """
+    平衡采样器，用于均衡 yes/no 样本的采样
+    
+    在训练时，no 样本重复 5 次，yes 和其他样本保持不变
+    """
+    
+    def __init__(self, dataset: LLaVADataset, seed: int = 42):
+        """
+        初始化平衡采样器
+        
+        Args:
+            dataset: LLaVADataset 数据集
+            seed: 随机种子
+        """
+        self.dataset = dataset
+        self.seed = seed
+        random.seed(seed)
+        
+        # 分类样本索引
+        self.yes_indices = []
+        self.no_indices = []
+        self.other_indices = []
+        
+        # 正则表达式模式
+        self.yes_no_patterns = [
+            r'\b(is|are|was|were|do|does|did|can|could|will|would|should|may|might|must|has|have|had)\b.*\?',
+            r'\b(Is|Are|Was|Were|Do|Does|Did|Can|Could|Will|Would|Should|May|Might|Must|Has|Have|Had)\b.*\?',
+        ]
+        self.yes_keywords = [r'\byes\b', r'\bYes\b', r'\bYES\b', r'\byeah\b', r'\bYeah\b', r'\byup\b', r'\bYup\b', r'\bcorrect\b', r'\bCorrect\b', r'\bright\b', r'\bRight\b', r'\btrue\b', r'\bTrue\b']
+        self.no_keywords = [r'\bno\b', r'\bNo\b', r'\bNO\b', r'\bnah\b', r'\bNah\b', r'\bnope\b', r'\bNope\b', r'\bincorrect\b', r'\bIncorrect\b', r'\bwrong\b', r'\bWrong\b', r'\bfalse\b', r'\bFalse\b']
+        
+        # 分析数据集
+        self._analyze_dataset()
+    
+    def _analyze_dataset(self):
+        """分析数据集，将样本分类"""
+        logger.info("正在分析数据集以平衡 yes/no 样本...")
+        
+        for idx in range(len(self.dataset)):
+            sample = self.dataset.data[idx]
+            conversations = sample.get('conversations', [])
+            
+            # 检查对话中是否有 yes/no 问题
+            for i in range(0, len(conversations) - 1, 2):
+                if i + 1 >= len(conversations):
+                    break
+                    
+                user_msg = conversations[i].get('value', '')
+                assistant_msg = conversations[i + 1].get('value', '')
+                
+                if conversations[i].get('from') != 'human':
+                    continue
+                
+                is_question = any(re.search(pattern, user_msg) for pattern in self.yes_no_patterns)
+                
+                if is_question:
+                    answer_lower = assistant_msg.lower().strip()
+                    
+                    if any(re.search(kw, answer_lower) for kw in self.yes_keywords):
+                        self.yes_indices.append(idx)
+                        break
+                    elif any(re.search(kw, answer_lower) for kw in self.no_keywords):
+                        self.no_indices.append(idx)
+                        break
+            else:
+                # 如果没有 yes/no 问题，归为其他类
+                self.other_indices.append(idx)
+        
+        logger.info(f"数据集分析完成:")
+        logger.info(f"  Yes 样本: {len(self.yes_indices)}")
+        logger.info(f"  No 样本: {len(self.no_indices)} (将重复5倍)")
+        logger.info(f"  其他样本: {len(self.other_indices)}")
+        
+        # 打乱索引
+        random.shuffle(self.yes_indices)
+        random.shuffle(self.no_indices)
+        random.shuffle(self.other_indices)
+    
+    def __iter__(self):
+        """生成采样索引"""
+        # no 样本重复 5 次
+        repeated_no = self.no_indices * 5
+        
+        # 合并所有样本
+        all_indices = self.yes_indices + repeated_no + self.other_indices
+        
+        # 打乱
+        random.shuffle(all_indices)
+        
+        # 迭代生成索引
+        for idx in all_indices:
+            yield idx
+    
+    def __len__(self):
+        """返回采样器长度"""
+        return len(self.yes_indices) + len(self.no_indices) * 5 + len(self.other_indices)
+
+
+def create_balanced_dataloader(dataset: LLaVADataset, batch_size: int = 2, 
+                                num_workers: int = 2,
+                                seed: int = 42, shuffle: bool = True):
+    """
+    创建平衡采样器的 DataLoader
+    
+    Args:
+        dataset: LLaVADataset 数据集
+        batch_size: 批次大小
+        num_workers: 数据加载线程数
+        seed: 随机种子
+        shuffle: 是否打乱数据
+    
+    Returns:
+        DataLoader 实例
+    """
+    from torch.utils.data import DataLoader
+    
+    if shuffle:
+        sampler = BalancedSampler(dataset, seed=seed)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+    else:
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+    return dataloader
+
+
 
 # 使用示例
 if __name__ == "__main__":
     # # 创建数据集加载器
-    check_data_set()
+    analyze_yes_no_bias(sample_size=30000)
     # dataset = LLaVADataset(sample_size=1000)
     
     # # 加载数据

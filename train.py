@@ -5,7 +5,7 @@ VLM 视觉语言模型训练脚本
 """
 
 from model import VLMModel
-from data_set import LLaVADataset
+from data_set import LLaVADataset, create_balanced_dataloader
 from torch.utils.data import DataLoader
 import torch
 import torch.optim as optim
@@ -337,13 +337,12 @@ def main():
     )
     val_dataset.load()
     
-    # 创建 DataLoader
-    train_dataloader = DataLoader(
+    # 创建 DataLoader (使用 BalancedSampler 平衡 yes/no 样本)
+    train_dataloader = create_balanced_dataloader(
         train_dataset,
         batch_size=config['batch_size'],
-        shuffle=True,
         num_workers=2,
-        pin_memory=True
+        shuffle=True
     )
     
     val_dataloader = DataLoader(
